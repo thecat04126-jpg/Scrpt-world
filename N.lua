@@ -1,8 +1,7 @@
 --[[
     PLAYERS ESP + AUTO ACTIONS + UI
-    Версия: 2.1 (улучшенный UI + прозрачный прицел)
+    Версия: 3.0 (прицел — основной способ выбора координат)
     Для Delta Executor
-    Репозиторий: thecat04126-jpg/Scrpt-world
 --]]
 
 local Players = game:GetService("Players")
@@ -14,7 +13,7 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -- ═══════════════════════════════════════════════════════
--- 🎨 ЦВЕТОВАЯ ПАЛИТРА UI
+-- 🎨 ТЕМА
 -- ═══════════════════════════════════════════════════════
 local Theme = {
     Bg          = Color3.fromRGB(20, 20, 28),
@@ -34,7 +33,6 @@ local Theme = {
 -- ⚙️ НАСТРОЙКИ
 -- ═══════════════════════════════════════════════════════
 local Settings = {
-    -- ESP
     Enabled = true,
     ShowName = true,
     ShowHealth = true,
@@ -46,7 +44,6 @@ local Settings = {
     TextSize = 14,
     HeadOffset = 3,
 
-    -- Автодействия
     AutoActions = false,
     TriggerRadius = 100,
     ApproachThreshold = 10,
@@ -59,7 +56,6 @@ local Settings = {
     WaitBeforeDeactivate = 3,
     WaitLeftWithoutApproach = 5,
 
-    -- Координаты кнопок
     Buttons = {
         Activate = nil,
         GiveTicket = nil,
@@ -67,12 +63,9 @@ local Settings = {
         Deactivate = nil,
     },
 
-    -- Прицел
-    CrosshairEnabled = false,
-    CrosshairLocked = false,
-    CrosshairPos = {X = 0, Y = 0},
     CrosshairColor = Color3.fromRGB(0, 255, 100),
     CrosshairSize = 80,
+    CrosshairBoxSize = 180,      -- размер квадрата прицела
 }
 
 local ESPCache = {}
@@ -82,8 +75,24 @@ local StateTimer = 0
 local InitialDistance = 0
 
 -- ═══════════════════════════════════════════════════════
--- 🔧 ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+-- 🔧 ХЕЛПЕРЫ
 -- ═══════════════════════════════════════════════════════
+local function addCorner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 8)
+    c.Parent = parent
+    return c
+end
+
+local function addStroke(parent, color, thickness)
+    local s = Instance.new("UIStroke")
+    s.Color = color or Theme.Border
+    s.Thickness = thickness or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = parent
+    return s
+end
+
 local function makeDraggable(frame, handle)
     handle = handle or frame
     local dragging, dragStart, startPos
@@ -113,24 +122,8 @@ local function makeDraggable(frame, handle)
     end)
 end
 
-local function addCorner(parent, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius or 8)
-    c.Parent = parent
-    return c
-end
-
-local function addStroke(parent, color, thickness)
-    local s = Instance.new("UIStroke")
-    s.Color = color or Theme.Border
-    s.Thickness = thickness or 1
-    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    s.Parent = parent
-    return s
-end
-
 -- ═══════════════════════════════════════════════════════
--- 🖥️ ГЛАВНОЕ ОКНО UI
+-- 🖥️ ГЛАВНОЕ ОКНО
 -- ═══════════════════════════════════════════════════════
 local MainGui = Instance.new("ScreenGui")
 MainGui.Name = "ESP_MainUI"
@@ -139,9 +132,7 @@ MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function() MainGui.Parent = CoreGui end)
 if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- Основной фрейм
 local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 460, 0, 380)
 MainFrame.Position = UDim2.new(0.5, -230, 0.5, -190)
 MainFrame.BackgroundColor3 = Theme.Bg
@@ -152,22 +143,21 @@ addCorner(MainFrame, 12)
 addStroke(MainFrame, Theme.Border, 1.5)
 makeDraggable(MainFrame)
 
--- ─── Заголовок ───
+-- Заголовок
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 42)
 TitleBar.BackgroundColor3 = Theme.BgLight
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
-local titleCorner = addCorner(TitleBar, 12)
--- скрываем нижний скруглённый угол у заголовка
-local titleFix = Instance.new("Frame")
-titleFix.Size = UDim2.new(1, 0, 0, 12)
-titleFix.Position = UDim2.new(0, 0, 1, -12)
-titleFix.BackgroundColor3 = Theme.BgLight
-titleFix.BorderSizePixel = 0
-titleFix.Parent = TitleBar
+addCorner(TitleBar, 12)
 
--- Иконка
+local TitleFix = Instance.new("Frame")
+TitleFix.Size = UDim2.new(1, 0, 0, 12)
+TitleFix.Position = UDim2.new(0, 0, 1, -12)
+TitleFix.BackgroundColor3 = Theme.BgLight
+TitleFix.BorderSizePixel = 0
+TitleFix.Parent = TitleBar
+
 local TitleIcon = Instance.new("TextLabel")
 TitleIcon.Text = "🎯"
 TitleIcon.Size = UDim2.new(0, 30, 1, 0)
@@ -178,7 +168,6 @@ TitleIcon.Font = Enum.Font.GothamBold
 TitleIcon.TextSize = 18
 TitleIcon.Parent = TitleBar
 
--- Заголовок
 local Title = Instance.new("TextLabel")
 Title.Text = "ESP  •  AUTO ACTIONS"
 Title.Size = UDim2.new(1, -150, 1, 0)
@@ -190,7 +179,6 @@ Title.TextSize = 15
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TitleBar
 
--- Кнопка свернуть
 local MinimizeBtn = Instance.new("TextButton")
 MinimizeBtn.Text = "—"
 MinimizeBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -203,7 +191,6 @@ MinimizeBtn.BorderSizePixel = 0
 MinimizeBtn.Parent = TitleBar
 addCorner(MinimizeBtn, 6)
 
--- Кнопка закрыть
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Text = "✕"
 CloseBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -216,7 +203,7 @@ CloseBtn.BorderSizePixel = 0
 CloseBtn.Parent = TitleBar
 addCorner(CloseBtn, 6)
 
--- ─── Вкладки ───
+-- Вкладки
 local TabBar = Instance.new("Frame")
 TabBar.Size = UDim2.new(1, -24, 0, 36)
 TabBar.Position = UDim2.new(0, 12, 0, 50)
@@ -233,7 +220,7 @@ ContentFrame.BorderSizePixel = 0
 ContentFrame.Parent = MainFrame
 addCorner(ContentFrame, 10)
 
--- ─── Вкладка: КОНСОЛЬ ───
+-- Консоль
 local ConsoleTab = Instance.new("ScrollingFrame")
 ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
 ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
@@ -261,7 +248,6 @@ local function log(text, color)
     label.TextSize = 12
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = ConsoleTab
-    -- ограничение строк
     local children = ConsoleTab:GetChildren()
     if #children > 105 then
         for i = 1, 10 do
@@ -273,9 +259,8 @@ local function log(text, color)
 end
 
 log("Консоль инициализирована", Theme.TextDim)
-log("Ожидание действий...", Theme.TextDim)
 
--- ─── Вкладка: ТЕСТ ───
+-- Тест
 local TestTab = Instance.new("ScrollingFrame")
 TestTab.Size = UDim2.new(1, -12, 1, -12)
 TestTab.Position = UDim2.new(0, 6, 0, 6)
@@ -291,7 +276,7 @@ local TestLayout = Instance.new("UIListLayout")
 TestLayout.Padding = UDim.new(0, 8)
 TestLayout.Parent = TestTab
 
--- ─── Вкладка: НАСТРОЙКИ ───
+-- Настройки
 local SettingsTab = Instance.new("ScrollingFrame")
 SettingsTab.Size = UDim2.new(1, -12, 1, -12)
 SettingsTab.Position = UDim2.new(0, 6, 0, 6)
@@ -309,7 +294,7 @@ SettingsLayout.Padding = UDim.new(0, 6)
 SettingsLayout.Parent = SettingsTab
 
 -- ═══════════════════════════════════════════════════════
--- 🧱 КОМПОНЕНТЫ UI
+-- 🧱 UI-КОМПОНЕНТЫ
 -- ═══════════════════════════════════════════════════════
 local function makeSection(text)
     local s = Instance.new("TextLabel")
@@ -339,7 +324,6 @@ local function makeButton(parent, text, callback, color)
     btn.Parent = parent
     addCorner(btn, 8)
 
-    -- hover эффект
     btn.MouseEnter:Connect(function()
         TweenService:Create(btn, TweenInfo.new(0.15), {
             BackgroundColor3 = Theme.AccentHover
@@ -347,9 +331,10 @@ local function makeButton(parent, text, callback, color)
     end)
     btn.MouseLeave:Connect(function()
         TweenService:Create(btn, TweenInfo.new(0.15), {
-            BackgroundColor3 = color or Theme.BgLighter
+            BackgroundColor3 = btn:GetAttribute("BaseColor") or color or Theme.BgLighter
         }):Play()
     end)
+    btn:SetAttribute("BaseColor", color or Theme.BgLighter)
     btn.MouseButton1Click:Connect(callback)
     return btn
 end
@@ -438,13 +423,202 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ЗАПОЛНЕНИЕ ВКЛАДКИ "ТЕСТ"
+-- 🎯 ОКНО ПРИЦЕЛА (СТАРЫЙ ДИЗАЙН, квадрат полупрозрачный)
+-- ═══════════════════════════════════════════════════════
+local CrosshairGui = Instance.new("ScreenGui")
+CrosshairGui.Name = "ESP_Crosshair"
+CrosshairGui.ResetOnSpawn = false
+CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+CrosshairGui.IgnoreGuiInset = true
+CrosshairGui.Enabled = false
+pcall(function() CrosshairGui.Parent = CoreGui end)
+if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+-- ─── Окно с прицелом ───
+local CrossFrame = Instance.new("Frame")
+CrossFrame.Size = UDim2.new(0, 320, 0, 380)
+CrossFrame.Position = UDim2.new(0.5, -160, 0.5, -190)
+CrossFrame.BackgroundColor3 = Theme.Bg
+CrossFrame.BorderSizePixel = 0
+CrossFrame.Active = true
+CrossFrame.Parent = CrosshairGui
+addCorner(CrossFrame, 12)
+addStroke(CrossFrame, Theme.Border, 1.5)
+makeDraggable(CrossFrame)
+
+-- Заголовок окна прицела
+local CrossTitle = Instance.new("Frame")
+CrossTitle.Size = UDim2.new(1, 0, 0, 38)
+CrossTitle.BackgroundColor3 = Theme.BgLight
+CrossTitle.BorderSizePixel = 0
+CrossTitle.Parent = CrossFrame
+addCorner(CrossTitle, 12)
+
+local CrossTitleFix = Instance.new("Frame")
+CrossTitleFix.Size = UDim2.new(1, 0, 0, 10)
+CrossTitleFix.Position = UDim2.new(0, 0, 1, -10)
+CrossTitleFix.BackgroundColor3 = Theme.BgLight
+CrossTitleFix.BorderSizePixel = 0
+CrossTitleFix.Parent = CrossTitle
+
+local CrossTitleLbl = Instance.new("TextLabel")
+CrossTitleLbl.Text = "🎯 ПРИЦЕЛ"
+CrossTitleLbl.Size = UDim2.new(1, -20, 1, 0)
+CrossTitleLbl.Position = UDim2.new(0, 10, 0, 0)
+CrossTitleLbl.BackgroundTransparency = 1
+CrossTitleLbl.TextColor3 = Theme.Text
+CrossTitleLbl.Font = Enum.Font.GothamBold
+CrossTitleLbl.TextSize = 14
+CrossTitleLbl.TextXAlignment = Enum.TextXAlignment.Center
+CrossTitleLbl.Parent = CrossTitle
+
+-- ─── Чёрный квадрат (ПОЛУПРОЗРАЧНЫЙ) ───
+local SquareArea = Instance.new("Frame")
+SquareArea.Name = "SquareArea"
+SquareArea.Size = UDim2.new(0, Settings.CrosshairBoxSize, 0, Settings.CrosshairBoxSize)
+SquareArea.Position = UDim2.new(0.5, -Settings.CrosshairBoxSize/2, 0, 60)
+SquareArea.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+SquareArea.BackgroundTransparency = 0.6   -- ⬅️ ПОЛУПРОЗРАЧНЫЙ (видно игру сквозь)
+SquareArea.BorderSizePixel = 0
+SquareArea.Parent = CrossFrame
+addCorner(SquareArea, 6)
+addStroke(SquareArea, Theme.Accent, 1.5)
+
+-- ─── Крест внутри квадрата ───
+local CrossH = Instance.new("Frame")
+CrossH.Name = "CrossH"
+CrossH.Size = UDim2.new(0, Settings.CrosshairSize, 0, 2)
+CrossH.Position = UDim2.new(0.5, -Settings.CrosshairSize/2, 0.5, -1)
+CrossH.BackgroundColor3 = Settings.CrosshairColor
+CrossH.BorderSizePixel = 0
+CrossH.Parent = SquareArea
+
+local CrossV = Instance.new("Frame")
+CrossV.Name = "CrossV"
+CrossV.Size = UDim2.new(0, 2, 0, Settings.CrosshairSize)
+CrossV.Position = UDim2.new(0.5, -1, 0.5, -Settings.CrosshairSize/2)
+CrossV.BackgroundColor3 = Settings.CrosshairColor
+CrossV.BorderSizePixel = 0
+CrossV.Parent = SquareArea
+
+-- Центральная точка (это и есть координаты)
+local CrossDot = Instance.new("Frame")
+CrossDot.Name = "CrossDot"
+CrossDot.Size = UDim2.new(0, 6, 0, 6)
+CrossDot.Position = UDim2.new(0.5, -3, 0.5, -3)
+CrossDot.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+CrossDot.BorderSizePixel = 0
+CrossDot.Parent = SquareArea
+addCorner(CrossDot, 3)
+
+-- Подпись "X, Y" под квадратом
+local CoordLabel = Instance.new("TextLabel")
+CoordLabel.Name = "CoordLabel"
+CoordLabel.Size = UDim2.new(1, -20, 0, 24)
+CoordLabel.Position = UDim2.new(0, 10, 0, 60 + Settings.CrosshairBoxSize + 6)
+CoordLabel.BackgroundColor3 = Theme.BgLight
+CoordLabel.Text = "X: —   Y: —"
+CoordLabel.TextColor3 = Theme.Text
+CoordLabel.Font = Enum.Font.Code
+CoordLabel.TextSize = 13
+CoordLabel.BorderSizePixel = 0
+CoordLabel.Parent = CrossFrame
+addCorner(CoordLabel, 6)
+
+-- ─── Кнопка "Выбрать (текущие координаты)" ───
+local SelectBtn = Instance.new("TextButton")
+SelectBtn.Name = "SelectBtn"
+SelectBtn.Text = "Выбрать (текущие координаты)"
+SelectBtn.Size = UDim2.new(1, -20, 0, 40)
+SelectBtn.Position = UDim2.new(0, 10, 1, -52)
+SelectBtn.BackgroundColor3 = Theme.Accent
+SelectBtn.TextColor3 = Theme.Text
+SelectBtn.Font = Enum.Font.GothamBold
+SelectBtn.TextSize = 13
+SelectBtn.BorderSizePixel = 0
+SelectBtn.AutoButtonColor = false
+SelectBtn.Parent = CrossFrame
+addCorner(SelectBtn, 8)
+
+SelectBtn.MouseEnter:Connect(function()
+    TweenService:Create(SelectBtn, TweenInfo.new(0.15), {
+        BackgroundColor3 = Theme.AccentHover
+    }):Play()
+end)
+SelectBtn.MouseLeave:Connect(function()
+    TweenService:Create(SelectBtn, TweenInfo.new(0.15), {
+        BackgroundColor3 = Theme.Accent
+    }):Play()
+end)
+
+-- ─── Обновление координат на экране ───
+local currentPickKey = nil
+local currentPickName = nil
+
+local function updateCoordLabel()
+    if not currentPickKey then return end
+    -- Текущие координаты — центр квадрата в пикселях экрана
+    local centerScreen = SquareArea.AbsolutePosition + SquareArea.AbsoluteSize/2
+    CoordLabel.Text = string.format("X: %d   Y: %d", centerScreen.X, centerScreen.Y)
+end
+
+RunService.RenderStepped:Connect(function()
+    if CrosshairGui.Enabled then
+        updateCoordLabel()
+    end
+end)
+
+-- ─── Открытие окна прицела для конкретной кнопки ───
+local function openCrosshairPicker(key, displayName)
+    currentPickKey = key
+    currentPickName = displayName
+    CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — " .. displayName
+    CrosshairGui.Enabled = true
+    MainGui.Enabled = false
+    log("🎯 Выбор координат для: " .. displayName, Theme.Warning)
+    task.wait(0.1)
+    updateCoordLabel()
+end
+
+-- ─── Кнопка "Выбрать (текущие координаты)" ───
+SelectBtn.MouseButton1Click:Connect(function()
+    if not currentPickKey then
+        log("❌ Не выбрана цель", Theme.Danger)
+        return
+    end
+
+    -- Берём центр квадрата в абсолютных координатах экрана
+    local centerScreen = SquareArea.AbsolutePosition + SquareArea.AbsoluteSize/2
+    local x = math.floor(centerScreen.X)
+    local y = math.floor(centerScreen.Y)
+
+    Settings.Buttons[currentPickKey] = {
+        Path = nil,           -- путь неизвестен (задаём только координаты)
+        Pos = {X = x, Y = y},
+    }
+
+    log(string.format("✓ %s: X=%d, Y=%d", currentPickName, x, y), Theme.Success)
+
+    -- Обновляем текст кнопки в настройках
+    if getgenv().refreshButtonLabels then
+        getgenv().refreshButtonLabels()
+    end
+
+    -- Закрываем окно прицела
+    CrosshairGui.Enabled = false
+    MainGui.Enabled = true
+    currentPickKey = nil
+    currentPickName = nil
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "ТЕСТ"
 -- ═══════════════════════════════════════════════════════
 local function makeTestBtn(text, callback, color)
     return makeButton(TestTab, text, callback, color)
 end
 
-makeTestBtn("🧪 Найти игроков в радиусе " .. Settings.TriggerRadius .. "м", function()
+makeTestBtn("🧪 Найти игроков в радиусе", function()
     local found = 0
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
@@ -505,7 +679,7 @@ makeTestBtn("🔄 Сбросить состояние", function()
 end, Theme.Danger)
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ЗАПОЛНЕНИЕ ВКЛАДКИ "НАСТРОЙКИ"
+-- 📋 ВКЛАДКА "НАСТРОЙКИ"
 -- ═══════════════════════════════════════════════════════
 makeSection("АВТОДЕЙСТВИЯ")
 makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
@@ -530,6 +704,9 @@ makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Sett
 makeToggle(SettingsTab, "Проверка команды", Settings.TeamCheck, function(v) Settings.TeamCheck = v end)
 
 makeSection("КООРДИНАТЫ КНОПОК")
+
+local buttonLabelRefs = {}
+
 local function makeButtonSetter(name, key)
     local row = Instance.new("Frame")
     row.Size = UDim2.new(1, 0, 0, 34)
@@ -562,41 +739,25 @@ local function makeButtonSetter(name, key)
     btn.Parent = row
     addCorner(btn, 6)
 
-    btn.MouseButton1Click:Connect(function()
-        log("🎯 Кликни по кнопке '" .. name .. "'", Theme.Warning)
-        MainGui.Enabled = false
-        task.wait(0.3)
-        local conn
-        conn = UserInputService.InputBegan:Connect(function(input, gpe)
-            if gpe then return end
-            if input.UserInputType == Enum.UserInputType.MouseButton1
-               or input.UserInputType == Enum.UserInputType.Touch then
-                local gui = LocalPlayer.PlayerGui:GetGuiObjectsAtPosition(input.Position.X, input.Position.Y)
-                local found = false
-                for _, obj in pairs(gui) do
-                    if obj:IsA("GuiButton") then
-                        local path = obj.Name
-                        local p = obj.Parent
-                        while p and p ~= game do
-                            path = p.Name .. "." .. path
-                            p = p.Parent
-                        end
-                        Settings.Buttons[key] = {Path = path, Pos = {X = input.Position.X, Y = input.Position.Y}}
-                        log("✓ Задано: " .. obj.Name, Theme.Success)
-                        found = true
-                        break
-                    end
-                end
-                if not found then
-                    log("❌ Кнопка не найдена в этой точке", Theme.Danger)
-                end
-                conn:Disconnect()
-                MainGui.Enabled = true
-                btn.Text = Settings.Buttons[key] and "✓ Задано" or "Выбрать"
-                btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
-            end
-        end)
+    -- hover
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Theme.AccentHover
+        }):Play()
     end)
+    btn.MouseLeave:Connect(function()
+        local baseColor = Settings.Buttons[key] and Theme.Success or Theme.Warning
+        TweenService:Create(btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = baseColor
+        }):Play()
+    end)
+
+    btn.MouseButton1Click:Connect(function()
+        -- ✅ ОТКРЫВАЕМ ОКНО ПРИЦЕЛА ДЛЯ ЭТОЙ КНОПКИ
+        openCrosshairPicker(key, name)
+    end)
+
+    buttonLabelRefs[key] = {btn = btn, name = name}
 end
 
 makeButtonSetter("Активировать", "Activate")
@@ -604,140 +765,17 @@ makeButtonSetter("Выдать билет", "GiveTicket")
 makeButtonSetter("Проверить оружие", "CheckWeapon")
 makeButtonSetter("Деактивировать", "Deactivate")
 
--- ═══════════════════════════════════════════════════════
--- 🎯 ПРИЦЕЛ (прозрачный, показывается по кнопке)
--- ═══════════════════════════════════════════════════════
-local CrosshairGui = Instance.new("ScreenGui")
-CrosshairGui.Name = "ESP_Crosshair"
-CrosshairGui.ResetOnSpawn = false
-CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-CrosshairGui.IgnoreGuiInset = true
-pcall(function() CrosshairGui.Parent = CoreGui end)
-if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
-
--- Невидимая зона клика на весь экран
-local CrosshairHitbox = Instance.new("TextButton")
-CrosshairHitbox.Size = UDim2.new(1, 0, 1, 0)
-CrosshairHitbox.BackgroundTransparency = 1
-CrosshairHitbox.Text = ""
-CrosshairHitbox.AutoButtonColor = false
-CrosshairHitbox.Visible = false
-CrosshairHitbox.Parent = CrosshairGui
-
--- Визуальный крест
-local CrossVisual = Instance.new("Frame")
-CrossVisual.Size = UDim2.new(0, 200, 0, 200)
-CrossVisual.Position = UDim2.new(0.5, -100, 0.5, -100)
-CrossVisual.BackgroundTransparency = 1
-CrossVisual.Visible = false
-CrossVisual.Parent = CrosshairGui
-
-local crossX = Instance.new("Frame")
-crossX.Name = "H"
-crossX.Size = UDim2.new(0, Settings.CrosshairSize, 0, 2)
-crossX.Position = UDim2.new(0.5, -Settings.CrosshairSize/2, 0.5, -1)
-crossX.BackgroundColor3 = Settings.CrosshairColor
-crossX.BorderSizePixel = 0
-crossX.Parent = CrossVisual
-
-local crossY = Instance.new("Frame")
-crossY.Name = "V"
-crossY.Size = UDim2.new(0, 2, 0, Settings.CrosshairSize)
-crossY.Position = UDim2.new(0.5, -1, 0.5, -Settings.CrosshairSize/2)
-crossY.BackgroundColor3 = Settings.CrosshairColor
-crossY.BorderSizePixel = 0
-crossY.Parent = CrossVisual
-
-local crossDot = Instance.new("Frame")
-crossDot.Size = UDim2.new(0, 4, 0, 4)
-crossDot.Position = UDim2.new(0.5, -2, 0.5, -2)
-crossDot.BackgroundColor3 = Settings.CrosshairColor
-crossDot.BorderSizePixel = 0
-crossDot.Parent = CrossVisual
-addCorner(crossDot, 2)
-
--- Подсказка
-local CrossHint = Instance.new("TextLabel")
-CrossHint.Size = UDim2.new(0, 420, 0, 44)
-CrossHint.Position = UDim2.new(0.5, -210, 0, 70)
-CrossHint.BackgroundColor3 = Theme.Bg
-CrossHint.BackgroundTransparency = 0.1
-CrossHint.Text = "🎯  Наведись на нужную точку и кликни"
-CrossHint.TextColor3 = Theme.Text
-CrossHint.Font = Enum.Font.GothamBold
-CrossHint.TextSize = 14
-CrossHint.Visible = false
-CrossHint.Parent = CrosshairGui
-addCorner(CrossHint, 10)
-addStroke(CrossHint, Theme.Accent, 1.5)
-
-local function showCrosshair()
-    Settings.CrosshairEnabled = true
-    CrossVisual.Visible = true
-    if Settings.CrosshairPos.X ~= 0 or Settings.CrosshairPos.Y ~= 0 then
-        CrossVisual.Position = UDim2.new(0, Settings.CrosshairPos.X - 100, 0, Settings.CrosshairPos.Y - 100)
-    else
-        CrossVisual.Position = UDim2.new(0.5, -100, 0.5, -100)
-    end
-end
-
-local function hideCrosshair()
-    Settings.CrosshairEnabled = false
-    CrossVisual.Visible = false
-    CrossHint.Visible = false
-    CrosshairHitbox.Visible = false
-end
-
-local function startPicking()
-    Settings.CrosshairLocked = true
-    CrossVisual.Visible = true
-    CrossHint.Visible = true
-    CrosshairHitbox.Visible = true
-    CrossVisual.Position = UDim2.new(0.5, -100, 0.5, -100)
-
-    MainGui.Enabled = false
-    log("🎯 Режим выбора: кликни по нужной точке", Theme.Warning)
-
-    local conn
-    conn = CrosshairHitbox.MouseButton1Click:Connect(function()
-        local mousePos = UserInputService:GetMouseLocation()
-        local clickX = mousePos.X
-        local clickY = mousePos.Y - 36
-
-        Settings.CrosshairPos = {X = clickX, Y = clickY}
-        log(string.format("✓ Координаты: X=%d, Y=%d", clickX, clickY), Theme.Success)
-
-        CrossVisual.Position = UDim2.new(0, clickX - 100, 0, clickY - 100)
-        Settings.CrosshairLocked = false
-        CrossHint.Visible = false
-        CrosshairHitbox.Visible = false
-        MainGui.Enabled = true
-        conn:Disconnect()
-
-        if getgenv().updateCrosshairButton then getgenv().updateCrosshairButton() end
-    end)
-end
-
--- Секция "ПРИЦЕЛ" в настройках
-makeSection("ПРИЦЕЛ")
-
-makeToggle(SettingsTab, "Показывать прицел", Settings.CrosshairEnabled, function(v)
-    if v then showCrosshair(); log("Прицел включён", Theme.Success)
-    else hideCrosshair(); log("Прицел выключен", Theme.TextDim) end
-end)
-
-local pickBtnMain
-pickBtnMain = makeButton(SettingsTab, "🎯 Задать координаты (Выбрать)", function()
-    startPicking()
-end, Theme.Accent)
-
-getgenv().updateCrosshairButton = function()
-    if Settings.CrosshairPos.X ~= 0 or Settings.CrosshairPos.Y ~= 0 then
-        pickBtnMain.Text = string.format("✓ Прицел: X=%d, Y=%d", Settings.CrosshairPos.X, Settings.CrosshairPos.Y)
-        pickBtnMain.BackgroundColor3 = Theme.Success
-    else
-        pickBtnMain.Text = "🎯 Задать координаты (Выбрать)"
-        pickBtnMain.BackgroundColor3 = Theme.Accent
+-- Обновление текста кнопок после выбора координат
+getgenv().refreshButtonLabels = function()
+    for key, ref in pairs(buttonLabelRefs) do
+        local data = Settings.Buttons[key]
+        if data and data.Pos then
+            ref.btn.Text = string.format("✓ X=%d, Y=%d", data.Pos.X, data.Pos.Y)
+            ref.btn.BackgroundColor3 = Theme.Success
+        else
+            ref.btn.Text = "Выбрать"
+            ref.btn.BackgroundColor3 = Theme.Warning
+        end
     end
 end
 
@@ -746,29 +784,42 @@ end
 -- ═══════════════════════════════════════════════════════
 function fireButtonAction(btnData)
     if not btnData then return false end
-    local path = btnData.Path
-    if not path or path == "" then return false end
 
-    local parts = {}
-    for part in string.gmatch(path, "[^%.]+") do
-        table.insert(parts, part)
+    -- Если задан путь — ищем по пути в PlayerGui
+    if btnData.Path and btnData.Path ~= "" then
+        local parts = {}
+        for part in string.gmatch(btnData.Path, "[^%.]+") do
+            table.insert(parts, part)
+        end
+        local obj = LocalPlayer.PlayerGui
+        for _, part in ipairs(parts) do
+            if obj then obj = obj:FindFirstChild(part) end
+        end
+        if obj and obj:IsA("GuiButton") then
+            pcall(function() obj.MouseButton1Click:Fire() end)
+            return true
+        end
     end
 
-    local obj = LocalPlayer.PlayerGui
-    for _, part in ipairs(parts) do
-        if obj then obj = obj:FindFirstChild(part) end
+    -- Если заданы только координаты — ищем GuiButton под ними
+    if btnData.Pos then
+        local gui = LocalPlayer.PlayerGui:GetGuiObjectsAtPosition(btnData.Pos.X, btnData.Pos.Y)
+        for _, obj in pairs(gui) do
+            if obj:IsA("GuiButton") then
+                pcall(function() obj.MouseButton1Click:Fire() end)
+                log("Клик по кнопке: " .. obj.Name, Theme.Success)
+                return true
+            end
+        end
+        log("⚠ Кнопка не найдена на X=" .. btnData.Pos.X .. ", Y=" .. btnData.Pos.Y, Theme.Danger)
+        return false
     end
 
-    if obj and (obj:IsA("GuiButton")) then
-        pcall(function() obj.MouseButton1Click:Fire() end)
-        return true
-    end
-    log("⚠ Кнопка не найдена: " .. path, Theme.Danger)
     return false
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎨 ESP (BillboardGui)
+-- 🎨 ESP
 -- ═══════════════════════════════════════════════════════
 local function createESP(player)
     if player == LocalPlayer then return end
@@ -956,7 +1007,7 @@ Players.PlayerRemoving:Connect(removeESP)
 for _, p in pairs(Players:GetPlayers()) do createESP(p) end
 
 -- ═══════════════════════════════════════════════════════
--- 🔄 ЛОГИКА ПЕРЕКЛЮЧЕНИЯ ВКЛАДОК
+-- 🔄 ВКЛАДКИ
 -- ═══════════════════════════════════════════════════════
 local tabs = {
     {Name = "Консоль", Frame = ConsoleTab, Button = nil},
@@ -993,7 +1044,7 @@ for i, tab in ipairs(tabs) do
 end
 selectTab(1)
 
--- ─── Кнопка "свернуть" ───
+-- Свернуть
 local minimized = false
 local originalSize = MainFrame.Size
 MinimizeBtn.MouseButton1Click:Connect(function()
@@ -1020,11 +1071,6 @@ end)
 getgenv().ESP = {
     Settings = Settings,
     Toggle = function() Settings.Enabled = not Settings.Enabled end,
-    ToggleAuto = function()
-        Settings.AutoActions = not Settings.AutoActions
-        log("Автодействия: " .. tostring(Settings.AutoActions))
-    end,
-    SetDistance = function(d) Settings.MaxDistance = d end,
     Destroy = function()
         for p, _ in pairs(ESPCache) do removeESP(p) end
         MainGui:Destroy()
@@ -1034,10 +1080,6 @@ getgenv().ESP = {
 
 getgenv().ShowUI = function() MainGui.Enabled = true end
 getgenv().HideUI = function() MainGui.Enabled = false end
-getgenv().ShowCrosshair = function() showCrosshair() end
-getgenv().HideCrosshair = function() hideCrosshair() end
-getgenv().PickCrosshair = function() startPicking() end
 
 log("✅ Скрипт загружен!", Theme.Success)
-log("UI: getgenv().ShowUI()  |  Скрыть: getgenv().HideUI()", Theme.TextDim)
-log("Прицел: getgenv().ShowCrosshair()", Theme.TextDim)
+log("UI: getgenv().ShowUI()", Theme.TextDim)
