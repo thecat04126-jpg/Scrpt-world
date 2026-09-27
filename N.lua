@@ -1,11 +1,11 @@
 --[[
     N.lua — ESP + AUTO ACTIONS + ROUTES + DOOR WATCHER
-    Версия: 9.0 (pre-run console + фиксы)
+    Версия: 9.1 (исправлены баги, улучшен интерфейс)
     Для Delta Executor
 --]]
 
 -- ═══════════════════════════════════════════════════════
--- 🖥️ PRE-RUN CONSOLE (показывается во время загрузки)
+-- 🖥️ PRE-RUN CONSOLE
 -- ═══════════════════════════════════════════════════════
 local PreRunMessages = {}
 local PreRunFailed = false
@@ -23,7 +23,6 @@ local function preFail(err)
     print("[PRE] FATAL: " .. tostring(err))
 end
 
--- Создаём pre-run GUI сразу (используем PlayerGui, не CoreGui!)
 local PlayersSvc = game:GetService("Players")
 local LPlr = PlayersSvc.LocalPlayer
 repeat task.wait() until LPlr
@@ -37,33 +36,69 @@ PreGui.DisplayOrder = 100000
 PreGui.Parent = PGui
 
 local PreFrame = Instance.new("Frame")
-PreFrame.Size = UDim2.new(0, 520, 0, 280)
-PreFrame.Position = UDim2.new(0.5, -260, 0.5, -140)
+PreFrame.Size = UDim2.new(0, 520, 0, 300)
+PreFrame.Position = UDim2.new(0.5, -260, 0.5, -150)
 PreFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
 PreFrame.BorderSizePixel = 0
 PreFrame.Parent = PreGui
 local preCorner = Instance.new("UICorner")
-preCorner.CornerRadius = UDim.new(0, 10)
+preCorner.CornerRadius = UDim.new(0, 12)
 preCorner.Parent = PreFrame
 local preStroke = Instance.new("UIStroke")
 preStroke.Color = Color3.fromRGB(90, 130, 220)
 preStroke.Thickness = 2
 preStroke.Parent = PreFrame
+local preGradient = Instance.new("UIGradient")
+preGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(15, 15, 22)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 25, 40)),
+})
+preGradient.Rotation = 45
+preGradient.Parent = PreFrame
 
 local PreTitle = Instance.new("TextLabel")
 PreTitle.Size = UDim2.new(1, -20, 0, 30)
 PreTitle.Position = UDim2.new(0, 10, 0, 8)
 PreTitle.BackgroundTransparency = 1
-PreTitle.Text = "ESP v9.0 — PRE-RUN CONSOLE"
+PreTitle.Text = "ESP v9.1 — PRE-RUN"
 PreTitle.TextColor3 = Color3.fromRGB(120, 160, 255)
 PreTitle.Font = Enum.Font.GothamBold
 PreTitle.TextSize = 14
 PreTitle.TextXAlignment = Enum.TextXAlignment.Left
 PreTitle.Parent = PreFrame
 
+local PreSpinner = Instance.new("Frame")
+PreSpinner.Size = UDim2.new(0, 12, 0, 12)
+PreSpinner.Position = UDim2.new(1, -30, 0, 17)
+PreSpinner.BackgroundColor3 = Color3.fromRGB(120, 160, 255)
+PreSpinner.BorderSizePixel = 0
+PreSpinner.Parent = PreFrame
+local spCorner = Instance.new("UICorner")
+spCorner.CornerRadius = UDim.new(1, 0)
+spCorner.Parent = PreSpinner
+
+local PreProgress = Instance.new("Frame")
+PreProgress.Size = UDim2.new(1, -20, 0, 4)
+PreProgress.Position = UDim2.new(0, 10, 0, 38)
+PreProgress.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+PreProgress.BorderSizePixel = 0
+PreProgress.Parent = PreFrame
+local prCorner = Instance.new("UICorner")
+prCorner.CornerRadius = UDim.new(1, 0)
+prCorner.Parent = PreProgress
+
+local PreProgressFill = Instance.new("Frame")
+PreProgressFill.Size = UDim2.new(0, 0, 1, 0)
+PreProgressFill.BackgroundColor3 = Color3.fromRGB(90, 130, 220)
+PreProgressFill.BorderSizePixel = 0
+PreProgressFill.Parent = PreProgress
+local pfCorner = Instance.new("UICorner")
+pfCorner.CornerRadius = UDim.new(1, 0)
+pfCorner.Parent = PreProgressFill
+
 local PreScroll = Instance.new("ScrollingFrame")
-PreScroll.Size = UDim2.new(1, -20, 1, -50)
-PreScroll.Position = UDim2.new(0, 10, 0, 42)
+PreScroll.Size = UDim2.new(1, -20, 1, -58)
+PreScroll.Position = UDim2.new(0, 10, 0, 50)
 PreScroll.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
 PreScroll.BorderSizePixel = 0
 PreScroll.ScrollBarThickness = 4
@@ -82,7 +117,6 @@ PreLayout.Parent = PreScroll
 
 local preLabelCount = 0
 local function preRender()
-    -- Очистить
     for _, ch in ipairs(PreScroll:GetChildren()) do
         if ch:IsA("TextLabel") then ch:Destroy() end
     end
@@ -101,12 +135,23 @@ local function preRender()
         preLabelCount = preLabelCount + 1
     end
     PreScroll.CanvasSize = UDim2.new(0, 0, 0, preLabelCount * 20)
+    local prog = math.min(#PreRunMessages / 15, 1)
+    PreProgressFill.Size = UDim2.new(prog, 0, 1, 0)
 end
+
+-- Спиннер-анимация
+local spinConn
+spinConn = game:GetService("RunService").Heartbeat:Connect(function(dt)
+    if PreSpinner and PreSpinner.Parent then
+        local r = tick() * 3
+        PreSpinner.BackgroundColor3 = Color3.fromHSV((r % 1), 0.7, 1)
+    end
+end)
 
 preLog("Pre-run console initialized", Color3.fromRGB(100, 200, 255))
 
 -- ═══════════════════════════════════════════════════════
--- ОСНОВНАЯ ЗАГРУЗКА (в pcall)
+-- ОСНОВНАЯ ЗАГРУЗКА
 -- ═══════════════════════════════════════════════════════
 local MainOk, MainErr = pcall(function()
 
@@ -116,7 +161,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
-local CoreGui = game:GetService("CoreGui")
 local GuiService = game:GetService("GuiService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
@@ -141,17 +185,22 @@ preLog("Creating theme...")
 -- 🎨 ТЕМА
 -- ═══════════════════════════════════════════════════════
 local Theme = {
-    Bg          = Color3.fromRGB(20, 20, 28),
-    BgLight     = Color3.fromRGB(30, 30, 40),
-    BgLighter   = Color3.fromRGB(42, 42, 55),
+    Bg          = Color3.fromRGB(18, 18, 26),
+    BgLight     = Color3.fromRGB(26, 26, 38),
+    BgLighter   = Color3.fromRGB(38, 38, 54),
+    BgCard      = Color3.fromRGB(30, 30, 44),
     Accent      = Color3.fromRGB(90, 130, 220),
     AccentHover = Color3.fromRGB(120, 160, 255),
-    Success     = Color3.fromRGB(0, 180, 100),
-    Danger      = Color3.fromRGB(210, 70, 70),
+    AccentDim   = Color3.fromRGB(60, 90, 160),
+    Success     = Color3.fromRGB(0, 190, 110),
+    Danger      = Color3.fromRGB(220, 70, 70),
+    DangerHover = Color3.fromRGB(255, 90, 90),
     Warning     = Color3.fromRGB(240, 170, 60),
     Text        = Color3.fromRGB(240, 240, 245),
     TextDim     = Color3.fromRGB(150, 150, 165),
-    Border      = Color3.fromRGB(60, 60, 80),
+    TextMuted   = Color3.fromRGB(100, 100, 120),
+    Border      = Color3.fromRGB(55, 55, 75),
+    BorderLight = Color3.fromRGB(80, 80, 110),
     BoxColor    = Color3.fromRGB(0, 255, 100),
     HighlightColor = Color3.fromRGB(255, 0, 0),
 }
@@ -170,6 +219,7 @@ local Settings = {
     MaxDistance = 1000,
     NameColor = Color3.fromRGB(255, 255, 255),
     HealthColor = Color3.fromRGB(0, 255, 0),
+    HighlightColor = Color3.fromRGB(255, 0, 0),
     TextSize = 14,
     HeadOffset = 3,
 
@@ -250,6 +300,16 @@ local function addStroke(parent, color, thickness)
     s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     s.Parent = parent
     return s
+end
+
+local function addPadding(parent, all)
+    local p = Instance.new("UIPadding")
+    p.PaddingTop = UDim.new(0, all)
+    p.PaddingBottom = UDim.new(0, all)
+    p.PaddingLeft = UDim.new(0, all)
+    p.PaddingRight = UDim.new(0, all)
+    p.Parent = parent
+    return p
 end
 
 local function makeDraggable(frame, handle)
@@ -460,9 +520,6 @@ local function findButtonByName(namePattern)
     pcall(function()
         for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do scanGui(gui) end
     end)
-    pcall(function()
-        for _, gui in ipairs(CoreGui:GetChildren()) do scanGui(gui) end
-    end)
     return found
 end
 
@@ -660,46 +717,91 @@ MainGui.ResetOnSpawn = false
 MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 MainGui.Parent = PGui
 
+-- Тень окна
+local ShadowFrame = Instance.new("Frame")
+ShadowFrame.Size = UDim2.new(0, 500, 0, 440)
+ShadowFrame.Position = UDim2.new(0.5, -246, 0.5, -206)
+ShadowFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+ShadowFrame.BackgroundTransparency = 0.5
+ShadowFrame.BorderSizePixel = 0
+ShadowFrame.ZIndex = 0
+ShadowFrame.Parent = MainGui
+addCorner(ShadowFrame, 16)
+
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 480, 0, 420)
-MainFrame.Position = UDim2.new(0.5, -240, 0.5, -210)
+MainFrame.Size = UDim2.new(0, 500, 0, 440)
+MainFrame.Position = UDim2.new(0.5, -250, 0.5, -220)
 MainFrame.BackgroundColor3 = Theme.Bg
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Parent = MainGui
-addCorner(MainFrame, 12)
-addStroke(MainFrame, Theme.Border, 1.5)
+addCorner(MainFrame, 14)
+addStroke(MainFrame, Theme.BorderLight, 1.5)
 makeDraggable(MainFrame)
 
+local MainGradient = Instance.new("UIGradient")
+MainGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 20, 30)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 15, 22)),
+})
+MainGradient.Rotation = 90
+MainGradient.Parent = MainFrame
+
+-- ═══════════════════════════════════════════════════════
+-- TITLE BAR
+-- ═══════════════════════════════════════════════════════
 local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 42)
+TitleBar.Size = UDim2.new(1, 0, 0, 48)
 TitleBar.BackgroundColor3 = Theme.BgLight
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
-addCorner(TitleBar, 12)
+addCorner(TitleBar, 14)
 
 local TitleFix = Instance.new("Frame")
-TitleFix.Size = UDim2.new(1, 0, 0, 12)
-TitleFix.Position = UDim2.new(0, 0, 1, -12)
+TitleFix.Size = UDim2.new(1, 0, 0, 14)
+TitleFix.Position = UDim2.new(0, 0, 1, -14)
 TitleFix.BackgroundColor3 = Theme.BgLight
 TitleFix.BorderSizePixel = 0
 TitleFix.Parent = TitleBar
 
-local TitleIcon = Instance.new("TextLabel")
-TitleIcon.Text = "ESP"
-TitleIcon.Size = UDim2.new(0, 50, 1, 0)
-TitleIcon.Position = UDim2.new(0, 12, 0, 0)
-TitleIcon.BackgroundTransparency = 1
-TitleIcon.TextColor3 = Theme.Accent
-TitleIcon.Font = Enum.Font.GothamBold
-TitleIcon.TextSize = 16
-TitleIcon.TextXAlignment = Enum.TextXAlignment.Left
-TitleIcon.Parent = TitleBar
+local TitleGradient = Instance.new("UIGradient")
+TitleGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(35, 35, 50)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 25, 38)),
+})
+TitleGradient.Rotation = 90
+TitleGradient.Parent = TitleBar
 
+-- Логотип
+local LogoFrame = Instance.new("Frame")
+LogoFrame.Size = UDim2.new(0, 34, 0, 34)
+LogoFrame.Position = UDim2.new(0, 12, 0.5, -17)
+LogoFrame.BackgroundColor3 = Theme.Accent
+LogoFrame.BorderSizePixel = 0
+LogoFrame.Parent = TitleBar
+addCorner(LogoFrame, 10)
+local LogoGradient = Instance.new("UIGradient")
+LogoGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(90, 130, 220)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 100, 220)),
+})
+LogoGradient.Rotation = 45
+LogoGradient.Parent = LogoFrame
+
+local LogoText = Instance.new("TextLabel")
+LogoText.Text = "E"
+LogoText.Size = UDim2.new(1, 0, 1, 0)
+LogoText.BackgroundTransparency = 1
+LogoText.TextColor3 = Color3.fromRGB(255, 255, 255)
+LogoText.Font = Enum.Font.GothamBold
+LogoText.TextSize = 18
+LogoText.Parent = LogoFrame
+
+-- Заголовок
 local Title = Instance.new("TextLabel")
-Title.Text = "ESP + AUTO ACTIONS v9.0"
-Title.Size = UDim2.new(1, -150, 1, 0)
-Title.Position = UDim2.new(0, 60, 0, 0)
+Title.Text = "ESP + AUTO ACTIONS"
+Title.Size = UDim2.new(1, -200, 0, 18)
+Title.Position = UDim2.new(0, 54, 0, 8)
 Title.BackgroundTransparency = 1
 Title.TextColor3 = Theme.Text
 Title.Font = Enum.Font.GothamBold
@@ -707,46 +809,75 @@ Title.TextSize = 14
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TitleBar
 
+local Subtitle = Instance.new("TextLabel")
+Subtitle.Text = "v9.1  •  Ready"
+Subtitle.Size = UDim2.new(1, -200, 0, 14)
+Subtitle.Position = UDim2.new(0, 54, 0, 26)
+Subtitle.BackgroundTransparency = 1
+Subtitle.TextColor3 = Theme.TextDim
+Subtitle.Font = Enum.Font.Gotham
+Subtitle.TextSize = 11
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.Parent = TitleBar
+
+-- Мини-индикатор статуса
+local StatusDot = Instance.new("Frame")
+StatusDot.Size = UDim2.new(0, 8, 0, 8)
+StatusDot.Position = UDim2.new(0, 42, 0, 20)
+StatusDot.BackgroundColor3 = Theme.Success
+StatusDot.BorderSizePixel = 0
+StatusDot.Parent = TitleBar
+addCorner(StatusDot, 4)
+
+-- Кнопки управления
 local MinimizeBtn = Instance.new("TextButton")
 MinimizeBtn.Text = "—"
-MinimizeBtn.Size = UDim2.new(0, 28, 0, 28)
-MinimizeBtn.Position = UDim2.new(1, -66, 0.5, -14)
+MinimizeBtn.Size = UDim2.new(0, 30, 0, 30)
+MinimizeBtn.Position = UDim2.new(1, -74, 0.5, -15)
 MinimizeBtn.BackgroundColor3 = Theme.BgLighter
 MinimizeBtn.TextColor3 = Theme.Text
 MinimizeBtn.Font = Enum.Font.GothamBold
 MinimizeBtn.TextSize = 16
 MinimizeBtn.BorderSizePixel = 0
+MinimizeBtn.AutoButtonColor = false
 MinimizeBtn.Parent = TitleBar
-addCorner(MinimizeBtn, 6)
+addCorner(MinimizeBtn, 8)
 
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Text = "X"
-CloseBtn.Size = UDim2.new(0, 28, 0, 28)
-CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -40, 0.5, -15)
 CloseBtn.BackgroundColor3 = Theme.Danger
 CloseBtn.TextColor3 = Theme.Text
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 14
 CloseBtn.BorderSizePixel = 0
+CloseBtn.AutoButtonColor = false
 CloseBtn.Parent = TitleBar
-addCorner(CloseBtn, 6)
+addCorner(CloseBtn, 8)
 
+-- ═══════════════════════════════════════════════════════
+-- TAB BAR
+-- ═══════════════════════════════════════════════════════
 local TabBar = Instance.new("Frame")
-TabBar.Size = UDim2.new(1, -24, 0, 36)
-TabBar.Position = UDim2.new(0, 12, 0, 50)
+TabBar.Size = UDim2.new(1, -24, 0, 40)
+TabBar.Position = UDim2.new(0, 12, 0, 58)
 TabBar.BackgroundColor3 = Theme.BgLight
 TabBar.BorderSizePixel = 0
 TabBar.Parent = MainFrame
-addCorner(TabBar, 8)
+addCorner(TabBar, 10)
 
 local ContentFrame = Instance.new("Frame")
-ContentFrame.Size = UDim2.new(1, -24, 1, -108)
-ContentFrame.Position = UDim2.new(0, 12, 0, 94)
+ContentFrame.Size = UDim2.new(1, -24, 1, -122)
+ContentFrame.Position = UDim2.new(0, 12, 0, 106)
 ContentFrame.BackgroundColor3 = Theme.BgLight
 ContentFrame.BorderSizePixel = 0
 ContentFrame.Parent = MainFrame
 addCorner(ContentFrame, 10)
 
+-- ═══════════════════════════════════════════════════════
+-- CONSOLE TAB
+-- ═══════════════════════════════════════════════════════
 ConsoleTab = Instance.new("ScrollingFrame")
 ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
 ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
@@ -766,6 +897,9 @@ ConsoleLayout.Parent = ConsoleTab
 
 log("Console ready", Theme.TextDim)
 
+-- ═══════════════════════════════════════════════════════
+-- TEST TAB
+-- ═══════════════════════════════════════════════════════
 local TestTab = Instance.new("ScrollingFrame")
 TestTab.Size = UDim2.new(1, -12, 1, -12)
 TestTab.Position = UDim2.new(0, 6, 0, 6)
@@ -782,6 +916,9 @@ local TestLayout = Instance.new("UIListLayout")
 TestLayout.Padding = UDim.new(0, 8)
 TestLayout.Parent = TestTab
 
+-- ═══════════════════════════════════════════════════════
+-- SETTINGS TAB
+-- ═══════════════════════════════════════════════════════
 local SettingsTab = Instance.new("ScrollingFrame")
 SettingsTab.Size = UDim2.new(1, -12, 1, -12)
 SettingsTab.Position = UDim2.new(0, 6, 0, 6)
@@ -804,24 +941,39 @@ preLog("Main UI OK", Color3.fromRGB(100, 255, 100))
 -- 🧱 UI-КОМПОНЕНТЫ
 -- ═══════════════════════════════════════════════════════
 local function makeSection(parent, text)
-    local s = Instance.new("TextLabel")
-    s.Text = "  " .. text
-    s.Size = UDim2.new(1, 0, 0, 26)
-    s.BackgroundColor3 = Theme.Bg
-    s.TextColor3 = Theme.Accent
-    s.Font = Enum.Font.GothamBold
-    s.TextSize = 12
-    s.TextXAlignment = Enum.TextXAlignment.Left
+    local s = Instance.new("Frame")
+    s.Size = UDim2.new(1, 0, 0, 28)
+    s.BackgroundColor3 = Theme.BgCard
     s.BorderSizePixel = 0
     s.Parent = parent
     addCorner(s, 6)
+    addStroke(s, Theme.Border, 1)
+
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 4, 0, 14)
+    dot.Position = UDim2.new(0, 8, 0.5, -7)
+    dot.BackgroundColor3 = Theme.Accent
+    dot.BorderSizePixel = 0
+    dot.Parent = s
+    addCorner(dot, 2)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Text = text
+    lbl.Size = UDim2.new(1, -20, 1, 0)
+    lbl.Position = UDim2.new(0, 18, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Theme.Accent
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = s
     return s
 end
 
 local function makeButton(parent, text, callback, color)
     local btn = Instance.new("TextButton")
     btn.Text = text
-    btn.Size = UDim2.new(1, 0, 0, 38)
+    btn.Size = UDim2.new(1, 0, 0, 40)
     btn.BackgroundColor3 = color or Theme.BgLighter
     btn.TextColor3 = Theme.Text
     btn.Font = Enum.Font.GothamBold
@@ -830,6 +982,7 @@ local function makeButton(parent, text, callback, color)
     btn.AutoButtonColor = false
     btn.Parent = parent
     addCorner(btn, 8)
+    addStroke(btn, Theme.Border, 1)
     btn:SetAttribute("BaseColor", color or Theme.BgLighter)
     btn.MouseEnter:Connect(function()
         TweenService:Create(btn, TweenInfo.new(0.15), {
@@ -841,6 +994,16 @@ local function makeButton(parent, text, callback, color)
             BackgroundColor3 = btn:GetAttribute("BaseColor")
         }):Play()
     end)
+    btn.MouseButton1Down:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.05), {
+            Size = UDim2.new(1, -4, 0, 38)
+        }):Play()
+    end)
+    btn.MouseButton1Up:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.1), {
+            Size = UDim2.new(1, 0, 0, 40)
+        }):Play()
+    end)
     btn.MouseButton1Click:Connect(function()
         pcall(callback)
     end)
@@ -849,16 +1012,17 @@ end
 
 local function makeToggle(parent, text, default, callback)
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
+    row.Size = UDim2.new(1, 0, 0, 36)
+    row.BackgroundColor3 = Theme.BgCard
     row.BorderSizePixel = 0
     row.Parent = parent
     addCorner(row, 8)
+    addStroke(row, Theme.Border, 1)
 
     local lbl = Instance.new("TextLabel")
     lbl.Text = text
     lbl.Size = UDim2.new(1, -80, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.TextColor3 = Theme.Text
     lbl.Font = Enum.Font.Gotham
@@ -868,8 +1032,8 @@ local function makeToggle(parent, text, default, callback)
 
     local state = default
     local toggle = Instance.new("TextButton")
-    toggle.Size = UDim2.new(0, 54, 0, 22)
-    toggle.Position = UDim2.new(1, -64, 0.5, -11)
+    toggle.Size = UDim2.new(0, 50, 0, 22)
+    toggle.Position = UDim2.new(1, -60, 0.5, -11)
     toggle.BackgroundColor3 = state and Theme.Success or Theme.BgLighter
     toggle.Text = state and "ON" or "OFF"
     toggle.TextColor3 = Theme.Text
@@ -881,7 +1045,7 @@ local function makeToggle(parent, text, default, callback)
     addCorner(toggle, 11)
     toggle.MouseButton1Click:Connect(function()
         state = not state
-        TweenService:Create(toggle, TweenInfo.new(0.15), {
+        TweenService:Create(toggle, TweenInfo.new(0.2), {
             BackgroundColor3 = state and Theme.Success or Theme.BgLighter
         }):Play()
         toggle.Text = state and "ON" or "OFF"
@@ -892,16 +1056,17 @@ end
 
 local function makeInput(parent, text, default, callback)
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
+    row.Size = UDim2.new(1, 0, 0, 36)
+    row.BackgroundColor3 = Theme.BgCard
     row.BorderSizePixel = 0
     row.Parent = parent
     addCorner(row, 8)
+    addStroke(row, Theme.Border, 1)
 
     local lbl = Instance.new("TextLabel")
     lbl.Text = text
     lbl.Size = UDim2.new(0.55, -12, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.TextColor3 = Theme.Text
     lbl.Font = Enum.Font.Gotham
@@ -910,7 +1075,7 @@ local function makeInput(parent, text, default, callback)
     lbl.Parent = row
 
     local input = Instance.new("TextBox")
-    input.Size = UDim2.new(0.45, -12, 0, 24)
+    input.Size = UDim2.new(0.45, -14, 0, 24)
     input.Position = UDim2.new(0.55, 0, 0.5, -12)
     input.BackgroundColor3 = Theme.BgLighter
     input.Text = tostring(default or 0)
@@ -921,6 +1086,7 @@ local function makeInput(parent, text, default, callback)
     input.ClearTextOnFocus = false
     input.Parent = row
     addCorner(input, 6)
+    addStroke(input, Theme.Border, 1)
 
     input.FocusLost:Connect(function()
         local num = tonumber(input.Text)
@@ -1001,8 +1167,8 @@ CrossHandle.InputEnded:Connect(function(input)
 end)
 
 local CrossPanel = Instance.new("Frame")
-CrossPanel.Size = UDim2.new(0, 320, 0, 130)
-CrossPanel.Position = UDim2.new(0.5, -160, 1, -150)
+CrossPanel.Size = UDim2.new(0, 320, 0, 140)
+CrossPanel.Position = UDim2.new(0.5, -160, 1, -160)
 CrossPanel.BackgroundColor3 = Theme.Bg
 CrossPanel.BackgroundTransparency = 0.05
 CrossPanel.BorderSizePixel = 0
@@ -1015,9 +1181,9 @@ makeDraggable(CrossPanel)
 local CrossTitleLbl = Instance.new("TextLabel")
 CrossTitleLbl.Text = "CROSSHAIR"
 CrossTitleLbl.Size = UDim2.new(1, -20, 0, 24)
-CrossTitleLbl.Position = UDim2.new(0, 10, 0, 6)
+CrossTitleLbl.Position = UDim2.new(0, 10, 0, 8)
 CrossTitleLbl.BackgroundTransparency = 1
-CrossTitleLbl.TextColor3 = Theme.Text
+CrossTitleLbl.TextColor3 = Theme.Accent
 CrossTitleLbl.Font = Enum.Font.GothamBold
 CrossTitleLbl.TextSize = 13
 CrossTitleLbl.TextXAlignment = Enum.TextXAlignment.Center
@@ -1025,7 +1191,7 @@ CrossTitleLbl.Parent = CrossPanel
 
 local CoordLabel = Instance.new("TextLabel")
 CoordLabel.Size = UDim2.new(1, -20, 0, 22)
-CoordLabel.Position = UDim2.new(0, 10, 0, 32)
+CoordLabel.Position = UDim2.new(0, 10, 0, 36)
 CoordLabel.BackgroundTransparency = 1
 CoordLabel.Text = "X: - Y: -"
 CoordLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
@@ -1035,7 +1201,7 @@ CoordLabel.Parent = CrossPanel
 
 local OffsetInfo = Instance.new("TextLabel")
 OffsetInfo.Size = UDim2.new(1, -20, 0, 18)
-OffsetInfo.Position = UDim2.new(0, 10, 0, 54)
+OffsetInfo.Position = UDim2.new(0, 10, 0, 58)
 OffsetInfo.BackgroundTransparency = 1
 OffsetInfo.Text = "Offset X: 0 Y: 0"
 OffsetInfo.TextColor3 = Theme.TextDim
@@ -1045,8 +1211,8 @@ OffsetInfo.Parent = CrossPanel
 
 local SelectBtn = Instance.new("TextButton")
 SelectBtn.Text = "Select current coordinates"
-SelectBtn.Size = UDim2.new(1, -20, 0, 34)
-SelectBtn.Position = UDim2.new(0, 10, 1, -42)
+SelectBtn.Size = UDim2.new(1, -20, 0, 36)
+SelectBtn.Position = UDim2.new(0, 10, 1, -46)
 SelectBtn.BackgroundColor3 = Theme.Accent
 SelectBtn.TextColor3 = Theme.Text
 SelectBtn.Font = Enum.Font.GothamBold
@@ -1056,7 +1222,6 @@ SelectBtn.AutoButtonColor = false
 SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
 
--- ВАЖНО: объявляем переменные ЗАРАНЕЕ
 local currentPickKey = nil
 local currentPickName = nil
 local refreshButtonLabels = function() end
@@ -1110,9 +1275,9 @@ local function createESP(player)
 
     local highlight = Instance.new("Highlight")
     highlight.Name = "ESP_Highlight"
-    highlight.FillColor = Settings.HighlightColor
+    highlight.FillColor = Settings.HighlightColor or Color3.fromRGB(255, 0, 0)
     highlight.FillTransparency = 0.85
-    highlight.OutlineColor = Theme.BoxColor
+    highlight.OutlineColor = Theme.BoxColor or Color3.fromRGB(0, 255, 100)
     highlight.OutlineTransparency = 0
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Enabled = false
@@ -1332,16 +1497,17 @@ local buttonLabelRefs = {}
 
 local function makeButtonSetter(name, key)
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
+    row.Size = UDim2.new(1, 0, 0, 36)
+    row.BackgroundColor3 = Theme.BgCard
     row.BorderSizePixel = 0
     row.Parent = SettingsTab
     addCorner(row, 8)
+    addStroke(row, Theme.Border, 1)
 
     local lbl = Instance.new("TextLabel")
     lbl.Text = name
     lbl.Size = UDim2.new(0.5, -12, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.TextColor3 = Theme.Text
     lbl.Font = Enum.Font.Gotham
@@ -1350,7 +1516,7 @@ local function makeButtonSetter(name, key)
     lbl.Parent = row
 
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.5, -12, 0, 24)
+    btn.Size = UDim2.new(0.5, -14, 0, 24)
     btn.Position = UDim2.new(0.5, 0, 0.5, -12)
     btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
     btn.Text = Settings.Buttons[key] and "SET" or "Select"
@@ -1680,10 +1846,10 @@ end)
 -- 🎧 СОБЫТИЯ
 -- ═══════════════════════════════════════════════════════
 Players.PlayerAdded:Connect(function(player)
-    createESP(player)
+    pcall(function() createESP(player) end)
 end)
 Players.PlayerRemoving:Connect(function(player)
-    removeESP(player)
+    pcall(function() removeESP(player) end)
     ProcessedPlayers[player] = nil
     IgnoredPlayers[player] = nil
     for i = #Queue, 1, -1 do
@@ -1691,16 +1857,16 @@ Players.PlayerRemoving:Connect(function(player)
     end
 end)
 for _, p in pairs(Players:GetPlayers()) do
-    createESP(p)
+    pcall(function() createESP(p) end)
 end
 
 -- ═══════════════════════════════════════════════════════
 -- 🔄 ВКЛАДКИ
 -- ═══════════════════════════════════════════════════════
 local tabs = {
-    {Name = "Console", Frame = ConsoleTab},
-    {Name = "Test", Frame = TestTab},
-    {Name = "Settings", Frame = SettingsTab},
+    {Name = "Console", Icon = "▤", Frame = ConsoleTab},
+    {Name = "Test",    Icon = "◆", Frame = TestTab},
+    {Name = "Settings", Icon = "⚙", Frame = SettingsTab},
 }
 
 local function selectTab(index)
@@ -1710,17 +1876,20 @@ local function selectTab(index)
             TweenService:Create(tab.Button, TweenInfo.new(0.15), {
                 BackgroundColor3 = (i == index) and Theme.Accent or Theme.BgLighter
             }):Play()
+            TweenService:Create(tab.Button, TweenInfo.new(0.15), {
+                TextColor3 = (i == index) and Color3.fromRGB(255, 255, 255) or Theme.TextDim
+            }):Play()
         end
     end
 end
 
 for i, tab in ipairs(tabs) do
     local btn = Instance.new("TextButton")
-    btn.Text = tab.Name
-    btn.Size = UDim2.new(1/#tabs, -4, 1, 0)
-    btn.Position = UDim2.new((i-1)/#tabs, 2, 0, 0)
+    btn.Text = tab.Icon .. "  " .. tab.Name
+    btn.Size = UDim2.new(1/#tabs, -4, 1, -6)
+    btn.Position = UDim2.new((i-1)/#tabs, 2, 0, 3)
     btn.BackgroundColor3 = Theme.BgLighter
-    btn.TextColor3 = Theme.Text
+    btn.TextColor3 = Theme.TextDim
     btn.Font = Enum.Font.GothamBold
     btn.TextSize = 13
     btn.BorderSizePixel = 0
@@ -1732,18 +1901,26 @@ for i, tab in ipairs(tabs) do
 end
 selectTab(1)
 
+-- ═══════════════════════════════════════════════════════
+-- MINIMIZE / CLOSE
+-- ═══════════════════════════════════════════════════════
 local minimized = false
 local originalSize = MainFrame.Size
 MinimizeBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 480, 0, 42)}):Play()
+        TweenService:Create(MainFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(0, 500, 0, 48)}):Play()
+        TweenService:Create(ShadowFrame, TweenInfo.new(0.25), {Size = UDim2.new(0, 500, 0, 56)}):Play()
         ContentFrame.Visible = false
         TabBar.Visible = false
+        Subtitle.Visible = false
     else
-        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = originalSize}):Play()
+        TweenService:Create(MainFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = originalSize}):Play()
+        TweenService:Create(ShadowFrame, TweenInfo.new(0.25), {Size = UDim2.new(0, 500, 0, 440)}):Play()
+        task.wait(0.1)
         ContentFrame.Visible = true
         TabBar.Visible = true
+        Subtitle.Visible = true
     end
 end)
 
@@ -1788,7 +1965,7 @@ getgenv().HideUI = function()
     CrosshairGui.Enabled = false
 end
 
-log("Script v9.0 loaded!", Theme.Success)
+log("Script v9.1 loaded!", Theme.Success)
 log("Settings -> BUTTON COORDS for coordinates", Theme.Warning)
 log("Crosshair: press Select", Theme.Warning)
 
@@ -1797,7 +1974,7 @@ preLog("Main script loaded successfully", Color3.fromRGB(0, 255, 100))
 end) -- конец pcall
 
 -- ═══════════════════════════════════════════════════════
--- 🖥️ PRE-RUN: обновляем и показываем результат
+-- 🖥️ PRE-RUN: результат
 -- ═══════════════════════════════════════════════════════
 if not MainOk then
     preFail(MainErr)
@@ -1806,19 +1983,23 @@ end
 preRender()
 
 if PreRunFailed then
-    -- Оставляем консоль с красным фоном
     PreFrame.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
     preStroke.Color = Color3.fromRGB(255, 60, 60)
-    PreTitle.Text = "ESP v9.0 — PRE-RUN FAILED"
+    PreTitle.Text = "ESP v9.1 — PRE-RUN FAILED"
     PreTitle.TextColor3 = Color3.fromRGB(255, 80, 80)
-    PreLog = nil
+    pcall(function() spinConn:Disconnect() end)
+    if PreSpinner then PreSpinner.BackgroundColor3 = Color3.fromRGB(255, 60, 60) end
+    PreProgressFill.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+    PreProgressFill.Size = UDim2.new(1, 0, 1, 0)
     print("[ESP] SCRIPT FAILED: " .. tostring(PreRunError))
 else
-    -- Успех: показываем "OK" и исчезаем через 1.5 сек
     preLog("SUCCESS — closing in 1.5s", Color3.fromRGB(0, 255, 100))
     preRender()
+    PreProgressFill.BackgroundColor3 = Color3.fromRGB(0, 220, 120)
+    PreProgressFill.Size = UDim2.new(1, 0, 1, 0)
     task.spawn(function()
         task.wait(1.5)
+        pcall(function() spinConn:Disconnect() end)
         pcall(function() PreGui:Destroy() end)
     end)
 end
