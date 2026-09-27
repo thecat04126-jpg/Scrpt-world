@@ -1,6 +1,6 @@
 --[[
     obj_inf.lua — Инспектор объектов + E-прицел
-    Версия: 3.2
+    Версия: 3.3
     Для Delta Executor
 --]]
 
@@ -236,9 +236,10 @@ end
 -- 🖥️ ГЛАВНОЕ ОКНО
 -- ═══════════════════════════════════════════════════════
 local MainGui = Instance.new("ScreenGui")
-MainGui.Name = "ObjInspector_UI"
+MainGui.Name = "ObjInspector_Main"
 MainGui.ResetOnSpawn = false
 MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+MainGui.DisplayOrder = 100
 pcall(function() MainGui.Parent = CoreGui end)
 if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
@@ -268,7 +269,7 @@ TitleFix.BorderSizePixel = 0
 TitleFix.Parent = TitleBar
 
 local TitleLbl = Instance.new("TextLabel")
-TitleLbl.Text = "🔍 ИНСПЕКТОР ОБЪЕКТОВ v3.2"
+TitleLbl.Text = "🔍 ИНСПЕКТОР ОБЪЕКТОВ v3.3"
 TitleLbl.Size = UDim2.new(1, -150, 1, 0)
 TitleLbl.Position = UDim2.new(0, 12, 0, 0)
 TitleLbl.BackgroundTransparency = 1
@@ -665,11 +666,8 @@ local function guiLog(text, color)
     end
 end
 
-guiLog("✅ Инспектор v3.2 загружен!", Colors.Success)
+guiLog("✅ Инспектор v3.3 загружен!", Colors.Success)
 guiLog("🎯 Клик по объекту → инфа", Colors.Warning)
-guiLog("🖱 Клик по GUI-кнопке → путь + код", Colors.ButtonCol)
-guiLog("📌 E to all → маркеры над 3D-объектами", Colors.EColor)
-guiLog("🎯 E-прицел → квадрат с внутренними маркерами", Colors.ButtonCol)
 
 -- ═══════════════════════════════════════════════════════
 -- 🎯 ВЫДЕЛЕНИЕ
@@ -694,6 +692,7 @@ local EMarkersGui = Instance.new("ScreenGui")
 EMarkersGui.Name = "ObjInspector_EMarkers"
 EMarkersGui.ResetOnSpawn = false
 EMarkersGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+EMarkersGui.DisplayOrder = 105
 pcall(function() EMarkersGui.Parent = CoreGui end)
 if not EMarkersGui.Parent then EMarkersGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
@@ -796,14 +795,14 @@ local function eToAll()
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 E-ПРИЦЕЛ С ВНУТРЕННИМИ МАРКЕРАМИ
+-- 🎯 E-ПРИЦЕЛ (поверх всего)
 -- ═══════════════════════════════════════════════════════
 local AimGui = Instance.new("ScreenGui")
 AimGui.Name = "ObjInspector_Aim"
 AimGui.ResetOnSpawn = false
 AimGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 AimGui.IgnoreGuiInset = true
-AimGui.DisplayOrder = 9997
+AimGui.DisplayOrder = 99999         -- ⬅️ ВЫШЕ ВСЕХ
 pcall(function() AimGui.Parent = CoreGui end)
 if not AimGui.Parent then AimGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
@@ -818,18 +817,19 @@ AimSquare.BackgroundTransparency = 0.85
 AimSquare.BorderSizePixel = 0
 AimSquare.Active = true
 AimSquare.Visible = false
-AimSquare.ZIndex = 9990
+AimSquare.ZIndex = 100
 AimSquare.Parent = AimGui
 addCorner(AimSquare, 8)
 addStroke(AimSquare, Colors.ButtonCol, 2)
 
+-- Контейнер для маркеров — БЕЗ обрезки
 local AimMarkersContainer = Instance.new("Frame")
 AimMarkersContainer.Name = "MarkersContainer"
 AimMarkersContainer.Size = UDim2.new(1, 0, 1, 0)
 AimMarkersContainer.Position = UDim2.new(0, 0, 0, 0)
 AimMarkersContainer.BackgroundTransparency = 1
-AimMarkersContainer.ClipsDescendants = true
-AimMarkersContainer.ZIndex = 9995
+AimMarkersContainer.ClipsDescendants = false    -- ⬅️ НЕ ОБРЕЗАЕМ
+AimMarkersContainer.ZIndex = 105
 AimMarkersContainer.Parent = AimSquare
 
 local AimResize = Instance.new("TextButton")
@@ -844,7 +844,7 @@ AimResize.Font = Enum.Font.GothamBold
 AimResize.TextSize = 18
 AimResize.BorderSizePixel = 0
 AimResize.AutoButtonColor = false
-AimResize.ZIndex = 9999
+AimResize.ZIndex = 110
 AimResize.Parent = AimSquare
 addCorner(AimResize, 6)
 
@@ -858,7 +858,7 @@ AimHeader.TextStrokeTransparency = 0
 AimHeader.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 AimHeader.Font = Enum.Font.GothamBold
 AimHeader.TextSize = 12
-AimHeader.ZIndex = 9999
+AimHeader.ZIndex = 110
 AimHeader.Parent = AimSquare
 
 -- Перетаскивание прицела
@@ -872,9 +872,7 @@ AimSquare.InputBegan:Connect(function(input)
         local mx, my = input.Position.X, input.Position.Y
         local relX = (mx - absPos.X) / absSize.X
         local relY = (my - absPos.Y) / absSize.Y
-
         if relX > 0.82 and relY > 0.82 then return end
-
         aimDragging = true
         aimDragStart = input.Position
         aimStartPos = AimSquare.Position
@@ -897,7 +895,7 @@ AimSquare.InputEnded:Connect(function(input)
     end
 end)
 
--- Ресайз прицела
+-- Ресайз
 local aimResizing = false
 local aimResizeStart, aimStartSize
 AimResize.InputBegan:Connect(function(input)
@@ -925,31 +923,79 @@ AimResize.InputEnded:Connect(function(input)
     end
 end)
 
--- Внутренние маркеры
+-- ═══════════════════════════════════════════════════════
+-- 🎯 СБОР И ФИЛЬТРАЦИЯ КНОПОК
+-- ═══════════════════════════════════════════════════════
 local InsideMarkers = {}
+
+-- Список запрещённых имён GUI (наши)
+local FORBIDDEN_NAMES = {
+    "objinspector", "obj_inf", "objinspector_main", "objinspector_aim",
+    "objinspector_emarker", "objinspector_highlight",
+    "esp_mainui", "esp_crosshair", "esp_clickindicator",
+    "espclickindicator", "espmainui", "esp_routevisuals",
+    "routeauto", "aim",
+}
+
+-- Собираем ссылки на наши GUI
+local function isOurGui(gui)
+    if gui == MainGui or gui == EMarkersGui or gui == AimGui 
+       or gui == HighlightGui or gui == ClickIndicatorGui then
+        return true
+    end
+    local n = (gui.Name or ""):lower()
+    for _, fname in ipairs(FORBIDDEN_NAMES) do
+        if n:find(fname, 1, true) then return true end
+    end
+    return false
+end
+
+local function isInsideOurGui(obj)
+    local p = obj
+    while p and p ~= game do
+        if isOurGui(p) then return true end
+        p = p.Parent
+    end
+    return false
+end
 
 local function collectAllButtons()
     local buttons = {}
-    local function scanGui(gui)
-        pcall(function()
-            if not gui:IsA("ScreenGui") or not gui.Enabled then return end
-            if gui == MainGui or gui == EMarkersGui or gui == AimGui then return end
-            for _, obj in ipairs(gui:GetDescendants()) do
-                if obj:IsA("GuiButton") and obj.Visible and obj.Active then
-                    local s = obj.AbsoluteSize
-                    if s.X >= 20 and s.Y >= 20 and s.X < 1000 and s.Y < 800 then
-                        table.insert(buttons, obj)
+
+    pcall(function()
+        for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and not isOurGui(gui) then
+                for _, obj in ipairs(gui:GetDescendants()) do
+                    if obj:IsA("GuiButton") and obj.Visible and obj.Active then
+                        if not isInsideOurGui(obj) then
+                            local s = obj.AbsoluteSize
+                            if s.X >= 30 and s.Y >= 25 and s.X < 500 and s.Y < 400 then
+                                table.insert(buttons, obj)
+                            end
+                        end
                     end
                 end
             end
-        end)
-    end
-    pcall(function()
-        for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do scanGui(gui) end
+        end
     end)
+
     pcall(function()
-        for _, gui in pairs(CoreGui:GetChildren()) do scanGui(gui) end
+        for _, gui in pairs(CoreGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and not isOurGui(gui) then
+                for _, obj in ipairs(gui:GetDescendants()) do
+                    if obj:IsA("GuiButton") and obj.Visible and obj.Active then
+                        if not isInsideOurGui(obj) then
+                            local s = obj.AbsoluteSize
+                            if s.X >= 30 and s.Y >= 25 and s.X < 500 and s.Y < 400 then
+                                table.insert(buttons, obj)
+                            end
+                        end
+                    end
+                end
+            end
+        end
     end)
+
     return buttons
 end
 
@@ -957,9 +1003,9 @@ local function isInsideAim(button)
     local ap = AimSquare.AbsolutePosition
     local as = AimSquare.AbsoluteSize
     local bpos = button.AbsolutePosition
-    local bsize = button.AbsoluteSize
-    local cx = bpos.X + bsize.X / 2
-    local cy = bpos.Y + bsize.Y / 2
+    local bs = button.AbsoluteSize
+    local cx = bpos.X + bs.X / 2
+    local cy = bpos.Y + bs.Y / 2
     return cx >= ap.X and cx <= ap.X + as.X
        and cy >= ap.Y and cy <= ap.Y + as.Y
 end
@@ -973,12 +1019,15 @@ end
 
 local function createInsideMarker(button)
     if InsideMarkers[button] then
+        -- Обновить позицию
         local data = InsideMarkers[button]
         local ap = AimSquare.AbsolutePosition
         local bp = button.AbsolutePosition
         local bs = button.AbsoluteSize
-        local relX = (bp.X + bs.X / 2) - ap.X
-        local relY = (bp.Y + bs.Y / 2) - ap.Y
+        local centerX = bp.X + bs.X / 2
+        local centerY = bp.Y + bs.Y / 2
+        local relX = centerX - ap.X
+        local relY = centerY - ap.Y
         data.Marker.Position = UDim2.new(0, relX - 13, 0, relY - 13)
         return
     end
@@ -986,44 +1035,65 @@ local function createInsideMarker(button)
     local ap = AimSquare.AbsolutePosition
     local bp = button.AbsolutePosition
     local bs = button.AbsoluteSize
-    local relX = (bp.X + bs.X / 2) - ap.X
-    local relY = (bp.Y + bs.Y / 2) - ap.Y
+    local centerX = bp.X + bs.X / 2
+    local centerY = bp.Y + bs.Y / 2
+    local relX = centerX - ap.X
+    local relY = centerY - ap.Y
 
     local marker = Instance.new("TextButton")
     marker.Name = "InsideEMarker"
     marker.Size = UDim2.new(0, 26, 0, 26)
     marker.Position = UDim2.new(0, relX - 13, 0, relY - 13)
-    marker.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-    marker.BackgroundTransparency = 0.2
+    marker.BackgroundColor3 = Color3.fromRGB(255, 60, 60)   -- красный чтобы видеть
+    marker.BackgroundTransparency = 0.1
     marker.Text = "E"
-    marker.TextColor3 = Colors.ButtonCol
+    marker.TextColor3 = Color3.fromRGB(255, 255, 255)
     marker.TextStrokeTransparency = 0
     marker.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     marker.Font = Enum.Font.GothamBold
     marker.TextSize = 14
     marker.BorderSizePixel = 0
     marker.AutoButtonColor = false
-    marker.ZIndex = 9996
+    marker.ZIndex = 106
     marker.Parent = AimMarkersContainer
     addCorner(marker, 13)
-    addStroke(marker, Colors.ButtonCol, 2)
+    addStroke(marker, Color3.fromRGB(255, 220, 0), 2)
 
-    marker.MouseButton1Click:Connect(function()
-        guiLog("🖱 E-клик: " .. button.Name, Colors.ButtonCol)
-        showObject(button)
-        selectTab(1)
+    local touchStart = nil
+    marker.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            touchStart = input.Position
+        end
+    end)
+    marker.InputEnded:Connect(function(input)
+        if touchStart then
+            local delta = (Vector2.new(input.Position.X, input.Position.Y) 
+                         - Vector2.new(touchStart.X, touchStart.Y)).Magnitude
+            if delta < 10 then
+                guiLog("🖱 E-клик: " .. button.Name, Colors.ButtonCol)
+                showObject(button)
+                selectTab(1)
+            end
+            touchStart = nil
+        end
     end)
 
     InsideMarkers[button] = {Marker = marker, Button = button}
 end
 
+-- Основной цикл обновления
 local updateTimer = 0
+local diagTimer = 0
 RunService.RenderStepped:Connect(function(dt)
     if not AimActive then return end
+
+    -- Обновление маркеров 10 раз в секунду
     updateTimer = updateTimer + dt
     if updateTimer < 0.1 then return end
     updateTimer = 0
 
+    -- Обновить позиции существующих маркеров
     for btn, data in pairs(InsideMarkers) do
         if not btn.Parent or not btn.Visible then
             pcall(function() data.Marker:Destroy() end)
@@ -1032,14 +1102,18 @@ RunService.RenderStepped:Connect(function(dt)
             local ap = AimSquare.AbsolutePosition
             local bp = btn.AbsolutePosition
             local bs = btn.AbsoluteSize
-            local relX = (bp.X + bs.X / 2) - ap.X
-            local relY = (bp.Y + bs.Y / 2) - ap.Y
+            local centerX = bp.X + bs.X / 2
+            local centerY = bp.Y + bs.Y / 2
+            local relX = centerX - ap.X
+            local relY = centerY - ap.Y
             data.Marker.Position = UDim2.new(0, relX - 13, 0, relY - 13)
         end
     end
 
+    -- Найти все кнопки
     local buttons = collectAllButtons()
 
+    -- Убрать маркеры у кнопок, которые вышли из прицела
     for btn, data in pairs(InsideMarkers) do
         if not isInsideAim(btn) then
             pcall(function() data.Marker:Destroy() end)
@@ -1047,28 +1121,70 @@ RunService.RenderStepped:Connect(function(dt)
         end
     end
 
+    -- Добавить маркеры для новых кнопок
     for _, btn in ipairs(buttons) do
         if isInsideAim(btn) and not InsideMarkers[btn] then
             createInsideMarker(btn)
         end
     end
 
+    -- Обновить заголовок
     local count = 0
     for _ in pairs(InsideMarkers) do count = count + 1 end
     AimHeader.Text = "🎯 ПРИЦЕЛ — найдено кнопок: " .. count
+
+    -- ДИАГНОСТИКА — раз в 3 сек показываем в консоли что нашли
+    diagTimer = diagTimer + 0.1
+    if diagTimer >= 3 then
+        diagTimer = 0
+        local shown = 0
+        for btn, data in pairs(InsideMarkers) do
+            if shown < 10 then
+                local s = btn.AbsoluteSize
+                guiLog(string.format("🔍 %s [%dx%d] %s", btn.Name, s.X, s.Y, btn:GetFullName()), Colors.TextDim)
+                shown = shown + 1
+            end
+        end
+        if shown > 0 then
+            guiLog("... всего " .. count .. " кнопок", Colors.TextDim)
+        end
+    end
 end)
+
+-- ═══════════════════════════════════════════════════════
+-- 🎯 ПОКАЗ / СКРЫТИЕ ПРИЦЕЛА
+-- ═══════════════════════════════════════════════════════
+local minimized = false
+local originalSize = MainFrame.Size
 
 local function showAim()
     AimActive = true
     AimSquare.Visible = true
     AimSquare.Position = UDim2.new(0.5, -125, 0.5, -125)
-    guiLog("🎯 E-прицел активирован", Colors.ButtonCol)
+
+    -- Сворачиваем инспектор чтобы не мешал
+    if not minimized then
+        minimized = true
+        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 560, 0, 42)}):Play()
+        TabBar.Visible = false
+        ContentFrame.Visible = false
+    end
+
+    guiLog("🎯 E-прицел активирован (инспектор свёрнут)", Colors.ButtonCol)
 end
 
 local function hideAim()
     AimActive = false
     AimSquare.Visible = false
     clearInsideMarkers()
+
+    -- Разворачиваем инспектор
+    if minimized then
+        minimized = false
+        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = originalSize}):Play()
+        TabBar.Visible = true
+        ContentFrame.Visible = true
+    end
 end
 
 local function toggleAim()
@@ -1186,9 +1302,6 @@ function showObject(obj)
 
         guiLog("🖱 КНОПКА НАЙДЕНА!", Colors.ButtonCol)
         guiLog("   Путь: " .. prefix .. mainPath, Colors.CodeCol)
-        guiLog("   Visible=" .. tostring(btnInfo.Visible) 
-            .. " Active=" .. tostring(btnInfo.Active)
-            .. " Interactable=" .. tostring(btnInfo.Interactable), Colors.LogText)
 
         TabSwitch.Position = UDim2.new(0, 0, 0, 216)
         SearchBox.Position = UDim2.new(0, 0, 0, 252)
@@ -1231,47 +1344,22 @@ function showObject(obj)
             btnInfo.Active and Colors.Success or Colors.Danger)
         addPropRow(PropsList, "Interactable", tostring(btnInfo.Interactable), false,
             btnInfo.Interactable and Colors.Success or Colors.Danger)
-        addPropRow(PropsList, "AutoButtonColor", tostring(btnInfo.AutoButtonColor), false)
-        addPropRow(PropsList, "ZIndex", tostring(btnInfo.ZIndex), false)
-        addPropRow(PropsList, "ScreenGui", tostring(btnInfo.ScreenGui), false)
-        addPropRow(PropsList, "ScreenGui.Enabled", tostring(btnInfo.ScreenGuiEnabled), false,
-            btnInfo.ScreenGuiEnabled and Colors.Success or Colors.Danger)
-
-        addPropRow(PropsList, "⚡ ДОСТУПНЫЕ СИГНАЛЫ", "", true)
-        for _, sig in ipairs(btnInfo.Signals) do
-            addPropRow(PropsList, sig, "доступен", false, Colors.CodeCol)
-        end
 
         addPropRow(PropsList, "💻 КОД ДЛЯ ВЫЗОВА", "", true)
-
-        local mainPath = btnInfo.PlayerGuiPath or btnInfo.CoreGuiPath or obj.Name
+        local mainPath2 = btnInfo.PlayerGuiPath or btnInfo.CoreGuiPath or obj.Name
         local basePath = btnInfo.PlayerGuiPath and "game.Players.LocalPlayer.PlayerGui." 
             or (btnInfo.CoreGuiPath and "game:GetService('CoreGui')." or "game.")
-        local fullCode = basePath .. mainPath
-
+        local fullCode = basePath .. mainPath2
         addPropRow(PropsList, "Путь в Lua", fullCode, false, Colors.CodeCol)
-        addPropRow(PropsList, "Вызов 1", fullCode .. ":Activated()", false, Colors.CodeCol)
-        addPropRow(PropsList, "Вызов 2", fullCode .. ".MouseButton1Click:Fire()", false, Colors.CodeCol)
     end
 
     if obj:IsA("BasePart") then
         addPropRow(PropsList, "📍 ПОЗИЦИЯ", "", true)
         local posStr = string.format("Vector3(%.3f, %.3f, %.3f)", obj.Position.X, obj.Position.Y, obj.Position.Z)
-        local cfStr = string.format("CFrame(%.3f, %.3f, %.3f)", obj.CFrame.Position.X, obj.CFrame.Position.Y, obj.CFrame.Position.Z)
         local sizeStr = string.format("Vector3(%.2f, %.2f, %.2f)", obj.Size.X, obj.Size.Y, obj.Size.Z)
         addPropRow(PropsList, "Position", posStr, false)
-        addPropRow(PropsList, "CFrame", cfStr, false)
         addPropRow(PropsList, "Size", sizeStr, false)
         table.insert(AllProps, {Name = "Position", Value = posStr})
-        table.insert(AllProps, {Name = "Size", Value = sizeStr})
-    end
-
-    if obj:IsA("Model") then
-        addPropRow(PropsList, "📍 МОДЕЛЬ", "", true)
-        local pivot = obj:GetPivot()
-        local pivotStr = string.format("Vector3(%.3f, %.3f, %.3f)", pivot.Position.X, pivot.Position.Y, pivot.Position.Z)
-        addPropRow(PropsList, "Pivot", pivotStr, false)
-        table.insert(AllProps, {Name = "Pivot", Value = pivotStr})
     end
 
     addPropRow(PropsList, "⚙ ВСЕ СВОЙСТВА", "", true)
@@ -1374,7 +1462,6 @@ CopyBtn.MouseButton1Click:Connect(function()
     guiLog("════════════════════════════", Colors.TextDim)
     guiLog("📦 " .. CurrentObject:GetFullName(), Colors.Success)
     guiLog("════════════════════════════", Colors.TextDim)
-
     if CurrentButtonInfo then
         guiLog("🖱 КНОПКА!", Colors.ButtonCol)
         if CurrentButtonInfo.PlayerGuiPath then
@@ -1383,12 +1470,7 @@ CopyBtn.MouseButton1Click:Connect(function()
         if CurrentButtonInfo.CoreGuiPath then
             guiLog("   CoreGui: " .. CurrentButtonInfo.CoreGuiPath, Colors.CodeCol)
         end
-        guiLog("   Visible=" .. tostring(CurrentButtonInfo.Visible), Colors.LogText)
-        guiLog("   Active=" .. tostring(CurrentButtonInfo.Active), Colors.LogText)
-        guiLog("   Interactable=" .. tostring(CurrentButtonInfo.Interactable), Colors.LogText)
-        guiLog("════════════════════════════", Colors.TextDim)
     end
-
     for _, p in ipairs(AllProps) do
         guiLog(string.format("%s = %s", p.Name, p.Value), Colors.LogText)
     end
@@ -1419,25 +1501,17 @@ BP_CopyCodeBtn.MouseButton1Click:Connect(function()
         guiLog("⚠ Сначала выбери кнопку", Colors.Danger)
         return
     end
-
     local mainPath = CurrentButtonInfo.PlayerGuiPath or CurrentButtonInfo.CoreGuiPath
     local base = CurrentButtonInfo.PlayerGuiPath and "game.Players.LocalPlayer.PlayerGui." 
         or "game:GetService('CoreGui')."
-
     local fullPath = base .. mainPath
-
-    guiLog("════════════════════════════", Colors.TextDim)
     guiLog("💻 КОД ДЛЯ ВЫЗОВА КНОПКИ:", Colors.CodeCol)
-    guiLog("════════════════════════════", Colors.TextDim)
     guiLog("local btn = " .. fullPath, Colors.CodeCol)
     guiLog("btn.Activated:Fire()", Colors.CodeCol)
     guiLog("-- или", Colors.TextDim)
     guiLog("btn.MouseButton1Click:Fire()", Colors.CodeCol)
     guiLog("-- или", Colors.TextDim)
     guiLog("btn:Activate()", Colors.CodeCol)
-    guiLog("════════════════════════════", Colors.TextDim)
-    guiLog("✅ Скопировано в консоль", Colors.Success)
-
     selectTab(2)
 end)
 
@@ -1446,9 +1520,7 @@ BP_TestClickBtn.MouseButton1Click:Connect(function()
         guiLog("⚠ Выбранный объект не кнопка", Colors.Danger)
         return
     end
-
     guiLog("🧪 Тест клика по: " .. CurrentObject.Name, Colors.Warning)
-
     local ok, results = testClickButton(CurrentObject)
     if ok then
         for line in results:gmatch("[^\n]+") do
@@ -1560,8 +1632,6 @@ for i, tab in ipairs(Tabs) do
 end
 selectTab(1)
 
-local minimized = false
-local originalSize = MainFrame.Size
 MinBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
@@ -1616,6 +1686,5 @@ getgenv().InspectPart = function(part)
     end
 end
 
-print("[ObjInf v3.2] ✅ Инспектор загружен!")
-print("[ObjInf v3.2] 🎯 E-прицел: кнопка 'E-прицел' в верхней панели")
-print("[ObjInf v3.2] Скрыть: getgenv().ObjInf.Hide()")
+print("[ObjInf v3.3] ✅ Инспектор загружен!")
+print("[ObjInf v3.3] 🎯 E-прицел: кнопка 'E-прицел' в верхней панели")
