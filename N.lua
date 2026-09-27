@@ -1,7 +1,7 @@
 --[[
-    PLAYERS ESP + AUTO ACTIONS + UI + ROUTES
-    Версия: 5.0 (запись маршрутов + визуализация)
-    Для Delta Executor (телефон)
+    N.lua — ESP + AUTO ACTIONS + ROUTES + DOOR WATCHER
+    Версия: 7.1 (сдвиг X/Y + Home Position + Door Watch)
+    Для Delta Executor
 --]]
 
 if getgenv().ESP_LOADED then
@@ -39,9 +39,9 @@ local Theme = {
     Text        = Color3.fromRGB(240, 240, 245),
     TextDim     = Color3.fromRGB(150, 150, 165),
     Border      = Color3.fromRGB(60, 60, 80),
-    Record      = Color3.fromRGB(255, 60, 60),
-    StopPoint   = Color3.fromRGB(255, 30, 30),
-    PathColor   = Color3.fromRGB(0, 220, 100),
+    PathLine    = Color3.fromRGB(0, 220, 100),
+    StopMark    = Color3.fromRGB(255, 80, 80),
+    DoorMark    = Color3.fromRGB(255, 200, 80),
 }
 
 -- ═══════════════════════════════════════════════════════
@@ -79,13 +79,43 @@ local Settings = {
         GiveTicket = nil,
         CheckWeapon = nil,
         Deactivate = nil,
-        IncreaseNumber = nil,
+        NumberUp = nil,
     },
 
     CrosshairColor = Color3.fromRGB(0, 255, 100),
     ShowClickIndicator = true,
-    CrosshairOffsetY = 0,
+    CrosshairOffsetY = 0,       -- сдвиг по Y
+    CrosshairOffsetX = 0,       -- ⬅️ НОВОЕ: сдвиг по X (например -50)
 }
+
+-- ═══════════════════════════════════════════════════════
+-- 🚪 НАСТРОЙКИ МАРШРУТА + HOME POSITION
+-- ═══════════════════════════════════════════════════════
+local RouteSettings = {
+    DoorName = "RoomExit",
+    CurrentRoom = 1,
+    StepSize = 10,
+    StepDelay = 0.05,
+    StopLeftOffset = 3,
+    StopBackOffset = 2,
+    StopHeightOffset = 3,
+    AutoNextRoom = false,
+
+    -- Home Position — исходная точка (задаётся в настройках)
+    HomePosition = nil,         -- Vector3 или nil
+
+    -- Watcher дверей
+    WatchDoors = true,
+    DoorRotationThreshold = 5,
+    DoorMoveThreshold = 1,
+    ReturnHomeOnPlayerLeft = true,
+    NumberUpRetryCount = 3,
+    NumberUpRetryDelay = 0.5,
+}
+
+local Doors = {}
+local DoorWatcherData = {}
+local doorOpenHandled = {}
 
 local ESPCache = {}
 local ActionState = "idle"
@@ -94,28 +124,6 @@ local InitialDistance = 0
 local ProcessedPlayers = {}
 local IgnoredPlayers = {}
 local Queue = {}
-
--- ═══════════════════════════════════════════════════════
--- 🗺️ СИСТЕМА МАРШРУТОВ
--- ═══════════════════════════════════════════════════════
-local Routes = {
-    Recording = false,          -- идёт ли запись
-    RecordingRoom = "0001",     -- в какой комнате пишем
-    PathPoints = {},            -- все точки пути {Vector3}
-    StopPoints = {},            -- точки остановки {Vector3, Number}
-    Saved = {},                 -- {["0001"] = {Path={...}, Stops={...}}, ...}
-    CurrentRoom = "0001",       -- в какой комнате мы сейчас
-    LastSampleTime = 0,
-    SampleInterval = 0.1,       -- как часто записывать точки (сек)
-    MinDistance = 2,            -- минимальное расстояние между точками (studs)
-}
-
--- Цвета для визуализации маршрутов
-local RouteVisuals = {
-    PathParts = {},         -- части линии пути
-    StopMarkers = {},       -- маркеры остановок
-    Folder = nil,
-}
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -230,25 +238,26 @@ local function showClickIndicator(x, y)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🖱️ ТОЧНЫЙ ТАП
+-- 🖱️ ТОЧНЫЙ ТАП (с учётом сдвигов X и Y)
 -- ═══════════════════════════════════════════════════════
 local function clickAtScreenPosition(x, y)
     if not x or not y then return false end
     local topInset = GuiService:GetGuiInset().Y
+    local realX = x + (Settings.CrosshairOffsetX or 0)   -- ⬅️ СДВИГ ПО X
     local realY = y + topInset + (Settings.CrosshairOffsetY or 0)
-    showClickIndicator(x, realY)
+    showClickIndicator(realX, realY)
 
     local used = false
     pcall(function()
         if typeof(tap) == "function" then
-            tap(x, realY); used = true
+            tap(realX, realY); used = true
         end
     end)
     if used then return true end
 
     pcall(function()
         if typeof(touch) == "function" then
-            touch(x, realY); used = true
+            touch(realX, realY); used = true
         end
     end)
     if used then return true end
@@ -257,20 +266,20 @@ local function clickAtScreenPosition(x, y)
         VirtualInputManager:SendTouchEvent(
             Enum.UserInputType.Touch,
             Enum.UserInputState.Begin,
-            Vector2.new(x, realY)
+            Vector2.new(realX, realY)
         )
         task.wait(0.08)
         VirtualInputManager:SendTouchEvent(
             Enum.UserInputType.Touch,
             Enum.UserInputState.End,
-            Vector2.new(x, realY)
+            Vector2.new(realX, realY)
         )
     end)
 
     pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(x, realY, 0, true, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(realX, realY, 0, true, game, 1)
         task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(x, realY, 0, false, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(realX, realY, 0, false, game, 1)
     end)
 
     return true
@@ -284,207 +293,324 @@ function fireButtonAction(btnData)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🗺️ ФУНКЦИИ МАРШРУТОВ
+-- 🎯 КЛИК ПО GUI-КНОПКЕ (всеми способами)
 -- ═══════════════════════════════════════════════════════
+local function tryClickGuiButton(button)
+    if not button or not button:IsA("GuiButton") then return false end
 
--- Создание папки для визуализации
-local function createRouteFolder()
-    if RouteVisuals.Folder and RouteVisuals.Folder.Parent then
-        RouteVisuals.Folder:Destroy()
+    log("🖱 Пробую нажать: " .. button.ClassName .. " [" .. button.Name .. "]", Theme.Warning)
+
+    local pos = button.AbsolutePosition + button.AbsoluteSize / 2
+
+    pcall(function() button.Activated:Fire() end)
+    task.wait(0.1)
+    pcall(function() button.MouseButton1Click:Fire() end)
+    task.wait(0.1)
+    pcall(function()
+        button.MouseButton1Down:Fire(pos.X, pos.Y)
+        button.MouseButton1Up:Fire(pos.X, pos.Y)
+    end)
+    task.wait(0.1)
+    pcall(function() if button.Activate then button:Activate() end end)
+    task.wait(0.1)
+    pcall(function() if button.Select then button:Select() end end)
+    task.wait(0.1)
+
+    -- VirtualInput
+    pcall(function()
+        local topInset = GuiService:GetGuiInset().Y
+        local rx = pos.X + (Settings.CrosshairOffsetX or 0)
+        local ry = pos.Y + topInset + (Settings.CrosshairOffsetY or 0)
+        VirtualInputManager:SendMouseButtonEvent(rx, ry, 0, true, game, 1)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(rx, ry, 0, false, game, 1)
+    end)
+
+    -- tap/touch
+    pcall(function()
+        local topInset = GuiService:GetGuiInset().Y
+        local rx = pos.X + (Settings.CrosshairOffsetX or 0)
+        local ry = pos.Y + topInset + (Settings.CrosshairOffsetY or 0)
+        if typeof(tap) == "function" then tap(rx, ry)
+        elseif typeof(touch) == "function" then touch(rx, ry) end
+    end)
+
+    -- Ищем RemoteEvent внутри
+    pcall(function()
+        for _, child in ipairs(button:GetDescendants()) do
+            if child:IsA("RemoteEvent") then
+                child:FireServer()
+                log("  → RemoteEvent: " .. child.Name, Theme.Success)
+            end
+        end
+    end)
+
+    return true
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🔍 ПОИСК КНОПКИ ПО ИМЕНИ (для NumberUp)
+-- ═══════════════════════════════════════════════════════
+local function findButtonByName(namePattern)
+    local found = {}
+
+    local function scanGui(gui)
+        pcall(function()
+            if not gui:IsA("ScreenGui") then return end
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if desc:IsA("GuiButton") then
+                    local n = desc.Name:lower()
+                    if n:find(namePattern:lower(), 1, true) then
+                        table.insert(found, desc)
+                    end
+                end
+            end
+        end)
     end
-    local folder = Instance.new("Folder")
-    folder.Name = "ESP_Routes"
-    folder.Parent = workspace
-    RouteVisuals.Folder = folder
-    RouteVisuals.PathParts = {}
-    RouteVisuals.StopMarkers = {}
+
+    pcall(function()
+        for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+            scanGui(gui)
+        end
+    end)
+    pcall(function()
+        for _, gui in ipairs(CoreGui:GetChildren()) do
+            scanGui(gui)
+        end
+    end)
+
+    return found
 end
 
--- Очистить визуализацию
-local function clearVisuals()
-    for _, part in pairs(RouteVisuals.PathParts) do
-        pcall(function() part:Destroy() end)
-    end
-    for _, marker in pairs(RouteVisuals.StopMarkers) do
-        pcall(function() marker:Destroy() end)
-    end
-    RouteVisuals.PathParts = {}
-    RouteVisuals.StopMarkers = {}
-end
+-- ═══════════════════════════════════════════════════════
+-- 🚪 ПОИСК ДВЕРЕЙ
+-- ═══════════════════════════════════════════════════════
+local function findDoors()
+    Doors = {}
+    local count = 0
 
--- Создать сегмент пути (линия на полу)
-local function createPathSegment(fromPos, toPos)
-    local dist = (toPos - fromPos).Magnitude
-    if dist < 0.5 then return end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name == RouteSettings.DoorName
+           and (obj:IsA("BasePart") or obj:IsA("MeshPart")) then
+            local fullPath = obj:GetFullName()
+            local roomNum = tonumber(fullPath:match("Hotel%.(%d+)%."))
 
-    local part = Instance.new("Part")
-    part.Name = "PathSegment"
-    part.Anchored = true
-    part.CanCollide = false
-    part.Material = Enum.Material.Neon
-    part.Color = Theme.PathColor
-    part.Transparency = 0.3
-    part.Size = Vector3.new(0.5, 0.2, dist)
-    part.CFrame = CFrame.new((fromPos + toPos) / 2, toPos) * CFrame.Angles(0, math.rad(90), 0)
-    part.CFrame = CFrame.new((fromPos + toPos) / 2, toPos)
-    part.Parent = RouteVisuals.Folder
-    table.insert(RouteVisuals.PathParts, part)
-end
-
--- Создать маркер остановки (красный круг с цифрой)
-local function createStopMarker(position, number)
-    -- Круг на полу
-    local circle = Instance.new("Part")
-    circle.Name = "StopMarker_" .. number
-    circle.Shape = Enum.PartType.Cylinder
-    circle.Anchored = true
-    circle.CanCollide = false
-    circle.Material = Enum.Material.Neon
-    circle.Color = Theme.StopPoint
-    circle.Transparency = 0.3
-    circle.Size = Vector3.new(0.3, 8, 8)  -- толщина, диаметр, диаметр
-    circle.CFrame = CFrame.new(position + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
-    circle.Parent = RouteVisuals.Folder
-    table.insert(RouteVisuals.StopMarkers, circle)
-
-    -- Цифра (BillboardGui)
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "StopNumber"
-    billboard.Size = UDim2.new(0, 60, 0, 60)
-    billboard.StudsOffset = Vector3.new(0, 4, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Adornee = circle
-    billboard.Parent = circle
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = tostring(number)
-    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-    lbl.TextStrokeTransparency = 0
-    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextSize = 42
-    lbl.Parent = billboard
-end
-
--- Записать точку пути
-local function recordPathPoint(position)
-    local lastPoint = RouteVisuals.PathParts[#RouteVisuals.PathParts]
-    if lastPoint then
-        local lastPos = lastPoint.Position
-        if (position - lastPos).Magnitude < Routes.MinDistance then
-            return  -- слишком близко, пропускаем
+            if roomNum then
+                Doors[roomNum] = {
+                    Instance = obj,
+                    Position = obj.Position,
+                    CFrame = obj.CFrame,
+                    FullPath = fullPath,
+                }
+                count = count + 1
+            end
         end
     end
+    return count
+end
 
-    table.insert(Routes.PathPoints, position)
-    if #Routes.PathPoints > 1 then
-        createPathSegment(Routes.PathPoints[#Routes.PathPoints - 1], position)
+local function getDoor(roomNum)
+    return Doors[roomNum]
+end
+
+local function calculateStopPoint(door)
+    if not door or not door.CFrame then return nil end
+    local doorLook = door.CFrame.LookVector
+    local doorRight = door.CFrame.RightVector
+    return door.Position
+        - doorLook * RouteSettings.StopBackOffset
+        - doorRight * RouteSettings.StopLeftOffset
+        + Vector3.new(0, RouteSettings.StopHeightOffset, 0)
+end
+
+local function buildPath(fromPos, toPos)
+    local path = {}
+    local totalDistance = (toPos - fromPos).Magnitude
+    if totalDistance < RouteSettings.StepSize then
+        table.insert(path, toPos)
+        return path
+    end
+    local direction = (toPos - fromPos).Unit
+    local steps = math.floor(totalDistance / RouteSettings.StepSize)
+    for i = 1, steps do
+        table.insert(path, fromPos + direction * RouteSettings.StepSize * i)
+    end
+    table.insert(path, toPos)
+    return path
+end
+
+local function teleportAlongPath(path)
+    local myChar = LocalPlayer.Character
+    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return false end
+    for _, point in ipairs(path) do
+        myHRP.CFrame = CFrame.new(point)
+        task.wait(RouteSettings.StepDelay)
+    end
+    return true
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 👁️ WATCHER ДВЕРЕЙ
+-- ═══════════════════════════════════════════════════════
+local function initDoorWatcher()
+    DoorWatcherData = {}
+    local count = 0
+    for num, door in pairs(Doors) do
+        if door.Instance and door.Instance.Parent then
+            DoorWatcherData[door.Instance] = {
+                CFrame = door.Instance.CFrame,
+                Position = door.Instance.Position,
+                Rotation = door.Instance.Orientation,
+                RoomNum = num,
+            }
+            count = count + 1
+        end
+    end
+    log("👁️ Watcher инициализирован для " .. count .. " дверей", Theme.Success)
+end
+
+-- Что делать при открытии двери
+local function onDoorOpened(roomNum, doorInstance)
+    local now = tick()
+    if doorOpenHandled[roomNum] and now - doorOpenHandled[roomNum] < 3 then
+        return
+    end
+    doorOpenHandled[roomNum] = now
+
+    log("🚪 ДВЕРЬ " .. roomNum .. " ОТКРЫЛАСЬ! Пробую NumberUp", Theme.Success)
+
+    task.spawn(function()
+        -- Способ 1: по сохранённым координатам
+        if Settings.Buttons.NumberUp and Settings.Buttons.NumberUp.Pos then
+            log("📌 Способ 1: тап по координатам", Theme.TextDim)
+            for i = 1, RouteSettings.NumberUpRetryCount do
+                fireButtonAction(Settings.Buttons.NumberUp)
+                task.wait(RouteSettings.NumberUpRetryDelay)
+            end
+        end
+
+        -- Способ 2: поиск кнопки по имени
+        log("🔍 Способ 2: поиск кнопки по имени", Theme.TextDim)
+        local buttons = findButtonByName("NumberUp")
+        if #buttons == 0 then
+            buttons = findButtonByName("Increase")
+        end
+        if #buttons == 0 then
+            buttons = findButtonByName("Up")
+        end
+
+        for _, btn in ipairs(buttons) do
+            log("  Найдена: " .. btn:GetFullName(), Theme.Success)
+            tryClickGuiButton(btn)
+            task.wait(0.3)
+        end
+
+        if #buttons == 0 then
+            log("  ❌ Кнопка не найдена", Theme.Danger)
+        end
+    end)
+end
+
+-- Проверка изменений дверей
+local function checkDoorChanges()
+    if not RouteSettings.WatchDoors then return end
+
+    for doorInstance, data in pairs(DoorWatcherData) do
+        if not doorInstance or not doorInstance.Parent then
+            DoorWatcherData[doorInstance] = nil
+        else
+            local currentPos = doorInstance.Position
+            local currentRot = doorInstance.Orientation
+
+            local posDiff = (currentPos - data.Position).Magnitude
+            local rotDiff = (currentRot - data.Rotation).Magnitude
+
+            if posDiff > RouteSettings.DoorMoveThreshold or rotDiff > RouteSettings.DoorRotationThreshold then
+                log(string.format("🚪 ДВЕРЬ %s ИЗМЕНИЛАСЬ! (pos=%.2f, rot=%.2f)",
+                    data.RoomNum, posDiff, rotDiff), Theme.Success)
+
+                data.Position = currentPos
+                data.Rotation = currentRot
+                data.CFrame = doorInstance.CFrame
+
+                onDoorOpened(data.RoomNum, doorInstance)
+            end
+        end
     end
 end
 
--- Добавить точку остановки (текущая позиция игрока)
-local function addStopPoint()
-    local myChar = LocalPlayer.Character
-    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+-- ═══════════════════════════════════════════════════════
+-- 🏠 HOME POSITION
+-- ═══════════════════════════════════════════════════════
+local function setHomePosition(pos)
+    RouteSettings.HomePosition = pos
+    log("🏠 Home Position установлена: " .. tostring(pos), Theme.Success)
+end
+
+local function teleportToHome()
+    if not RouteSettings.HomePosition then
+        log("⚠ Home Position не задана", Theme.Warning)
+        return false
+    end
+
+    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return false end
+
+    -- Проверяем что там нет стены
+    local path = buildPath(myHRP.Position, RouteSettings.HomePosition)
+    teleportAlongPath(path)
+    log("🏠 Вернулся на Home Position", Theme.Success)
+    return true
+end
+
+-- Запомнить текущую позицию как Home
+local function rememberHomeFromNow()
+    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not myHRP then
         log("❌ Нет персонажа", Theme.Danger)
         return
     end
-
-    local pos = myHRP.Position
-    local number = #Routes.StopPoints + 1
-    table.insert(Routes.StopPoints, {Pos = pos, Number = number})
-    createStopMarker(pos, number)
-    log("🔴 Точка остановки #" .. number .. " добавлена", Theme.Warning)
+    setHomePosition(myHRP.Position)
 end
 
--- Начать запись
-local function startRecording()
-    if Routes.Recording then return end
-    Routes.Recording = true
-    Routes.PathPoints = {}
-    Routes.StopPoints = {}
-    Routes.LastSampleTime = 0
-    createRouteFolder()
-    log("🔴 ЗАПИСЬ НАЧАТА — комната " .. Routes.RecordingRoom, Theme.Danger)
-end
+-- ═══════════════════════════════════════════════════════
+-- 🚗 ЕХАТЬ К КОМНАТЕ
+-- ═══════════════════════════════════════════════════════
+function goToRoom(roomNum)
+    roomNum = roomNum or RouteSettings.CurrentRoom
 
--- Остановить запись
-local function stopRecording()
-    if not Routes.Recording then return end
-    Routes.Recording = false
-    log("⏹ ЗАПИСЬ ОСТАНОВЛЕНА — точек: " .. #Routes.PathPoints .. ", остановок: " .. #Routes.StopPoints, Theme.Warning)
-end
-
--- Зафиксировать маршрут
-local function saveRoute()
-    if #Routes.PathPoints == 0 and #Routes.StopPoints == 0 then
-        log("❌ Маршрут пустой", Theme.Danger)
-        return
+    if next(Doors) == nil then
+        local c = findDoors()
+        log("🔍 Найдено дверей: " .. c, Theme.Success)
     end
 
-    Routes.Saved[Routes.RecordingRoom] = {
-        Path = Routes.PathPoints,
-        Stops = Routes.StopPoints,
-        SavedAt = os.time(),
-    }
-
-    log("💾 Маршрут комнаты " .. Routes.RecordingRoom .. " сохранён (" .. #Routes.PathPoints .. " точек, " .. #Routes.StopPoints .. " остановок)", Theme.Success)
-end
-
--- Загрузить маршрут комнаты
-local function loadRoute(roomName)
-    local route = Routes.Saved[roomName]
-    if not route then
-        log("❌ Маршрут комнаты " .. roomName .. " не найден", Theme.Danger)
+    local door = getDoor(roomNum)
+    if not door then
+        log("❌ Дверь комнаты " .. roomNum .. " не найдена", Theme.Danger)
         return false
     end
 
-    Routes.PathPoints = route.Path
-    Routes.StopPoints = route.Stops
-    createRouteFolder()
+    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return false end
 
-    -- Восстанавливаем визуализацию
-    for i = 2, #route.Path do
-        createPathSegment(route.Path[i-1], route.Path[i])
-    end
-    for _, stop in ipairs(route.Stops) do
-        createStopMarker(stop.Pos, stop.Number)
-    end
+    local myPos = myHRP.Position
+    local stopPos = calculateStopPoint(door)
 
-    log("📂 Маршрут " .. roomName .. " загружен (" .. #route.Path .. " точек)", Theme.Success)
+    log("🚪 Едем к комнате " .. roomNum, Theme.Warning)
+    log(string.format("📍 Я: (%.1f, %.1f, %.1f)", myPos.X, myPos.Y, myPos.Z), Theme.TextDim)
+    log(string.format("🛑 Стоп: (%.1f, %.1f, %.1f)", stopPos.X, stopPos.Y, stopPos.Z), Theme.TextDim)
+
+    local path = buildPath(myPos, stopPos)
+    teleportAlongPath(path)
+    log("✅ Достигли точки стопа комнаты " .. roomNum, Theme.Success)
     return true
 end
 
--- Переключить номер комнаты (+1)
-local function nextRoom()
-    local num = tonumber(Routes.RecordingRoom) or 1
-    num = num + 1
-    Routes.RecordingRoom = string.format("%04d", num)
-    return Routes.RecordingRoom
-end
-
--- Телепорт к точке остановки
-local function teleportToStop(index)
-    local route = Routes.Saved[Routes.RecordingRoom]
-    if not route then
-        log("❌ Нет сохранённого маршрута для " .. Routes.RecordingRoom, Theme.Danger)
-        return
-    end
-
-    local stop = route.Stops[index]
-    if not stop then
-        log("❌ Точка #" .. index .. " не найдена", Theme.Danger)
-        return
-    end
-
-    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return end
-
-    myHRP.CFrame = CFrame.new(stop.Pos + Vector3.new(0, 3, 0))
-    log("📍 Телепорт к точке #" .. index, Theme.Success)
+function goToNextRoom()
+    RouteSettings.CurrentRoom = RouteSettings.CurrentRoom + 1
+    log("➡ Комната: " .. RouteSettings.CurrentRoom, Theme.Warning)
+    return goToRoom(RouteSettings.CurrentRoom)
 end
 
 -- ═══════════════════════════════════════════════════════
@@ -498,8 +624,8 @@ pcall(function() MainGui.Parent = CoreGui end)
 if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 460, 0, 400)
-MainFrame.Position = UDim2.new(0.5, -230, 0.5, -200)
+MainFrame.Size = UDim2.new(0, 480, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -240, 0.5, -210)
 MainFrame.BackgroundColor3 = Theme.Bg
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -508,13 +634,13 @@ addCorner(MainFrame, 12)
 addStroke(MainFrame, Theme.Border, 1.5)
 makeDraggable(MainFrame)
 
--- Заголовок
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 42)
 TitleBar.BackgroundColor3 = Theme.BgLight
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
 addCorner(TitleBar, 12)
+
 local TitleFix = Instance.new("Frame")
 TitleFix.Size = UDim2.new(1, 0, 0, 12)
 TitleFix.Position = UDim2.new(0, 0, 1, -12)
@@ -533,7 +659,7 @@ TitleIcon.TextSize = 18
 TitleIcon.Parent = TitleBar
 
 local Title = Instance.new("TextLabel")
-Title.Text = "ESP  •  AUTO ACTIONS"
+Title.Text = "ESP  •  AUTO  •  v7.1"
 Title.Size = UDim2.new(1, -150, 1, 0)
 Title.Position = UDim2.new(0, 46, 0, 0)
 Title.BackgroundTransparency = 1
@@ -567,7 +693,6 @@ CloseBtn.BorderSizePixel = 0
 CloseBtn.Parent = TitleBar
 addCorner(CloseBtn, 6)
 
--- Вкладки
 local TabBar = Instance.new("Frame")
 TabBar.Size = UDim2.new(1, -24, 0, 36)
 TabBar.Position = UDim2.new(0, 12, 0, 50)
@@ -584,7 +709,6 @@ ContentFrame.BorderSizePixel = 0
 ContentFrame.Parent = MainFrame
 addCorner(ContentFrame, 10)
 
--- Вкладка Консоль
 ConsoleTab = Instance.new("ScrollingFrame")
 ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
 ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
@@ -604,23 +728,6 @@ ConsoleLayout.Parent = ConsoleTab
 
 log("Консоль инициализирована", Theme.TextDim)
 
--- Вкладка Маршруты
-local RoutesTab = Instance.new("ScrollingFrame")
-RoutesTab.Size = UDim2.new(1, -12, 1, -12)
-RoutesTab.Position = UDim2.new(0, 6, 0, 6)
-RoutesTab.BackgroundTransparency = 1
-RoutesTab.BorderSizePixel = 0
-RoutesTab.ScrollBarThickness = 5
-RoutesTab.ScrollBarImageColor3 = Theme.Accent
-RoutesTab.CanvasSize = UDim2.new(0, 0, 0, 700)
-RoutesTab.Visible = false
-RoutesTab.Parent = ContentFrame
-
-local RoutesLayout = Instance.new("UIListLayout")
-RoutesLayout.Padding = UDim.new(0, 8)
-RoutesLayout.Parent = RoutesTab
-
--- Вкладка Тест
 local TestTab = Instance.new("ScrollingFrame")
 TestTab.Size = UDim2.new(1, -12, 1, -12)
 TestTab.Position = UDim2.new(0, 6, 0, 6)
@@ -628,7 +735,7 @@ TestTab.BackgroundTransparency = 1
 TestTab.BorderSizePixel = 0
 TestTab.ScrollBarThickness = 5
 TestTab.ScrollBarImageColor3 = Theme.Accent
-TestTab.CanvasSize = UDim2.new(0, 0, 0, 900)
+TestTab.CanvasSize = UDim2.new(0, 0, 0, 800)
 TestTab.Visible = false
 TestTab.Parent = ContentFrame
 
@@ -636,7 +743,6 @@ local TestLayout = Instance.new("UIListLayout")
 TestLayout.Padding = UDim.new(0, 8)
 TestLayout.Parent = TestTab
 
--- Вкладка Настройки
 local SettingsTab = Instance.new("ScrollingFrame")
 SettingsTab.Size = UDim2.new(1, -12, 1, -12)
 SettingsTab.Position = UDim2.new(0, 6, 0, 6)
@@ -678,7 +784,7 @@ local function makeButton(parent, text, callback, color)
     btn.BackgroundColor3 = color or Theme.BgLighter
     btn.TextColor3 = Theme.Text
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 14
+    btn.TextSize = 13
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
     btn.Parent = parent
@@ -781,144 +887,62 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "МАРШРУТЫ"
--- ═══════════════════════════════════════════════════════
-makeSection(RoutesTab, "УПРАВЛЕНИЕ ЗАПИСЬЮ")
-
--- СТАРТ / СТОП (в ряд)
-local recRow = Instance.new("Frame")
-recRow.Size = UDim2.new(1, 0, 0, 40)
-recRow.BackgroundTransparency = 1
-recRow.Parent = RoutesTab
-
-local startBtn = Instance.new("TextButton")
-startBtn.Text = "🔴 СТАРТ"
-startBtn.Size = UDim2.new(0.5, -4, 1, 0)
-startBtn.Position = UDim2.new(0, 0, 0, 0)
-startBtn.BackgroundColor3 = Theme.Record
-startBtn.TextColor3 = Theme.Text
-startBtn.Font = Enum.Font.GothamBold
-startBtn.TextSize = 14
-startBtn.BorderSizePixel = 0
-startBtn.AutoButtonColor = false
-startBtn.Parent = recRow
-addCorner(startBtn, 8)
-startBtn.MouseButton1Click:Connect(function()
-    startRecording()
-    startBtn.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
-    stopBtn.BackgroundColor3 = Theme.Danger
-end)
-
-local stopBtn = Instance.new("TextButton")
-stopBtn.Text = "⏹ СТОП"
-stopBtn.Size = UDim2.new(0.5, -4, 1, 0)
-stopBtn.Position = UDim2.new(0.5, 4, 0, 0)
-stopBtn.BackgroundColor3 = Theme.BgLighter
-stopBtn.TextColor3 = Theme.Text
-stopBtn.Font = Enum.Font.GothamBold
-stopBtn.TextSize = 14
-stopBtn.BorderSizePixel = 0
-stopBtn.AutoButtonColor = false
-stopBtn.Parent = recRow
-addCorner(stopBtn, 8)
-stopBtn.MouseButton1Click:Connect(function()
-    stopRecording()
-    startBtn.BackgroundColor3 = Theme.Record
-    stopBtn.BackgroundColor3 = Theme.BgLighter
-end)
-
--- Название комнаты
-local roomLabel = Instance.new("TextButton")
-roomLabel.Text = "КОМНАТА " .. Routes.RecordingRoom
-roomLabel.Size = UDim2.new(1, 0, 0, 50)
-roomLabel.BackgroundColor3 = Theme.Bg
-roomLabel.TextColor3 = Theme.Warning
-roomLabel.Font = Enum.Font.GothamBold
-roomLabel.TextSize = 20
-roomLabel.BorderSizePixel = 0
-roomLabel.AutoButtonColor = false
-roomLabel.Parent = RoutesTab
-addCorner(roomLabel, 8)
-addStroke(roomLabel, Theme.Warning, 2)
-
--- Точка остановки
-makeSection(RoutesTab, "ТОЧКИ ОСТАНОВКИ")
-
-makeButton(RoutesTab, "📍 Добавить точку (текущая позиция)", function()
-    addStopPoint()
-end, Theme.Success)
-
--- Фиксация маршрута
-makeSection(RoutesTab, "СОХРАНЕНИЕ")
-
-makeButton(RoutesTab, "💾 ЗАФИКСИРОВАТЬ МАРШРУТ", function()
-    saveRoute()
-end, Theme.Accent)
-
--- Следующая комната
-makeButton(RoutesTab, "➡ СЛЕДУЮЩАЯ КОМНАТА", function()
-    local newRoom = nextRoom()
-    roomLabel.Text = "КОМНАТА " .. newRoom
-    log("📁 Переключено на комнату " .. newRoom, Theme.Warning)
-end, Theme.Warning)
-
--- Переключение на конкретную комнату (для загрузки)
-makeSection(RoutesTab, "ЗАГРУЗКА СОХРАНЁННЫХ")
-
-makeInput(RoutesTab, "Номер комнаты (4 цифры)", Routes.RecordingRoom, function(v)
-    Routes.RecordingRoom = string.format("%04d", v)
-    roomLabel.Text = "КОМНАТА " .. Routes.RecordingRoom
-end)
-
-makeButton(RoutesTab, "📂 Загрузить маршрут комнаты", function()
-    loadRoute(Routes.RecordingRoom)
-end, Theme.BgLighter)
-
--- ═══════════════════════════════════════════════════════
 -- 📋 ВКЛАДКА "ТЕСТ"
 -- ═══════════════════════════════════════════════════════
 local function makeTestBtn(text, callback, color)
     return makeButton(TestTab, text, callback, color)
 end
 
-makeSection(TestTab, "МАРШРУТЫ")
+makeSection(TestTab, "МАРШРУТ")
 
-makeTestBtn("📍 На место #1", function()
-    teleportToStop(1)
+makeTestBtn("🚪 К комнате", function()
+    goToRoom(RouteSettings.CurrentRoom)
 end, Theme.Success)
 
-makeTestBtn("➡ В следующую комнату", function()
-    local newRoom = nextRoom()
-    if getgenv().refreshRoomLabel then
-        getgenv().refreshRoomLabel()
-    end
-    log("➡ Комната: " .. newRoom, Theme.Warning)
+makeTestBtn("➡ Следующая комната", function()
+    goToNextRoom()
 end, Theme.Warning)
 
-makeTestBtn("🧹 Очистить визуализацию", function()
-    clearVisuals()
-    log("🧹 Визуализация очищена", Theme.Warning)
-end, Theme.Danger)
+makeTestBtn("🏠 Запомнить Home Position (текущая)", function()
+    rememberHomeFromNow()
+end, Theme.Accent)
 
--- Старые функции ESP
-makeSection(TestTab, "ESP")
+makeTestBtn("🏠 Вернуться на Home Position", function()
+    teleportToHome()
+end, Theme.Warning)
 
-makeTestBtn("🧪 Найти игроков в радиусе", function()
-    local found = 0
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                if d <= Settings.TriggerRadius then
-                    found = found + 1
-                    log("Найден: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
-                end
-            end
-        end
+makeTestBtn("👁️ Начать слежение за дверями", function()
+    local c = findDoors()
+    log("🔍 Найдено дверей: " .. c, Theme.Success)
+    initDoorWatcher()
+end, Theme.Accent)
+
+makeTestBtn("🎯 Нажать NumberUp (ручной тест)", function()
+    local buttons = findButtonByName("NumberUp")
+    if #buttons == 0 then
+        buttons = findButtonByName("Increase")
     end
-    log("Всего в радиусе: " .. found, found > 0 and Theme.Success or Theme.TextDim)
-end)
+    if #buttons == 0 then
+        buttons = findButtonByName("Up")
+    end
+
+    if #buttons == 0 then
+        log("❌ Кнопка NumberUp не найдена", Theme.Danger)
+        -- Пробуем по координатам
+        if Settings.Buttons.NumberUp then
+            log("📌 Пробую по сохранённым координатам", Theme.Warning)
+            fireButtonAction(Settings.Buttons.NumberUp)
+        end
+        return
+    end
+
+    for _, btn in ipairs(buttons) do
+        log("🔍 Найдена: " .. btn:GetFullName(), Theme.Success)
+        tryClickGuiButton(btn)
+    end
+end, Theme.Warning)
+
+makeSection(TestTab, "КООРДИНАТЫ КНОПОК")
 
 makeTestBtn("▶  Активировать", function()
     if Settings.Buttons.Activate then
@@ -952,9 +976,9 @@ makeTestBtn("⏹  Деактивировать", function()
     end
 end)
 
-makeTestBtn("🔢 Увеличение номера", function()
-    if Settings.Buttons.IncreaseNumber then
-        fireButtonAction(Settings.Buttons.IncreaseNumber)
+makeTestBtn("🔢 Увеличение номера (тап по координатам)", function()
+    if Settings.Buttons.NumberUp then
+        fireButtonAction(Settings.Buttons.NumberUp)
     else
         log("❌ Координаты не заданы", Theme.Danger)
     end
@@ -966,12 +990,80 @@ makeTestBtn("🔄 Сбросить состояние", function()
     ProcessedPlayers = {}
     IgnoredPlayers = {}
     Queue = {}
+    doorOpenHandled = {}
     log("Состояние сброшено", Theme.Warning)
 end, Theme.Danger)
 
 -- ═══════════════════════════════════════════════════════
 -- 📋 ВКЛАДКА "НАСТРОЙКИ"
 -- ═══════════════════════════════════════════════════════
+makeSection(SettingsTab, "СДВИГИ КООРДИНАТ")
+makeInput(SettingsTab, "Сдвиг по X (например -50)", Settings.CrosshairOffsetX, function(v)
+    Settings.CrosshairOffsetX = v
+    log("Сдвиг X: " .. v, Theme.Warning)
+end)
+makeInput(SettingsTab, "Сдвиг по Y (например 50)", Settings.CrosshairOffsetY, function(v)
+    Settings.CrosshairOffsetY = v
+    log("Сдвиг Y: " .. v, Theme.Warning)
+end)
+
+makeSection(SettingsTab, "HOME POSITION")
+makeInput(SettingsTab, "Home X", RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0, function(v)
+    local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
+    local z = RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0
+    setHomePosition(Vector3.new(v, y, z))
+end)
+makeInput(SettingsTab, "Home Y", RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0, function(v)
+    local x = RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0
+    local z = RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0
+    setHomePosition(Vector3.new(x, v, z))
+end)
+makeInput(SettingsTab, "Home Z", RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0, function(v)
+    local x = RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0
+    local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
+    setHomePosition(Vector3.new(x, y, v))
+end)
+makeTestBtn("📍 Запомнить текущую как Home", function()
+    rememberHomeFromNow()
+end, Theme.Success)
+
+makeSection(SettingsTab, "WATCHER ДВЕРЕЙ")
+makeToggle(SettingsTab, "Следить за дверями", RouteSettings.WatchDoors, function(v)
+    RouteSettings.WatchDoors = v
+    if v then
+        initDoorWatcher()
+    end
+end)
+makeInput(SettingsTab, "Порог поворота (градусы)", RouteSettings.DoorRotationThreshold, function(v)
+    RouteSettings.DoorRotationThreshold = v
+end)
+makeInput(SettingsTab, "Порог смещения (studs)", RouteSettings.DoorMoveThreshold, function(v)
+    RouteSettings.DoorMoveThreshold = v
+end)
+makeInput(SettingsTab, "Попыток NumberUp", RouteSettings.NumberUpRetryCount, function(v)
+    RouteSettings.NumberUpRetryCount = v
+end)
+makeInput(SettingsTab, "Задержка между попытками (сек)", RouteSettings.NumberUpRetryDelay, function(v)
+    RouteSettings.NumberUpRetryDelay = v
+end)
+makeToggle(SettingsTab, "Возврат на Home если игрок исчез", RouteSettings.ReturnHomeOnPlayerLeft, function(v)
+    RouteSettings.ReturnHomeOnPlayerLeft = v
+end)
+
+makeSection(SettingsTab, "МАРШРУТ")
+makeInput(SettingsTab, "Текущая комната", RouteSettings.CurrentRoom, function(v)
+    RouteSettings.CurrentRoom = v
+end)
+makeInput(SettingsTab, "Шаг телепорта (studs)", RouteSettings.StepSize, function(v)
+    RouteSettings.StepSize = v
+end)
+makeInput(SettingsTab, "Сдвиг влево от двери", RouteSettings.StopLeftOffset, function(v)
+    RouteSettings.StopLeftOffset = v
+end)
+makeInput(SettingsTab, "Сдвиг назад от двери", RouteSettings.StopBackOffset, function(v)
+    RouteSettings.StopBackOffset = v
+end)
+
 makeSection(SettingsTab, "АВТОДЕЙСТВИЯ")
 makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
     Settings.AutoActions = v
@@ -992,81 +1084,12 @@ makeInput(SettingsTab, "Ожидание если ушёл (с)", Settings.WaitL
 makeInput(SettingsTab, "Задержка между игроками (с)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
 makeInput(SettingsTab, "Игнор после деактивации (с)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
 
-makeSection(SettingsTab, "ЗАПИСЬ МАРШРУТА")
-makeInput(SettingsTab, "Интервал записи (сек)", Routes.SampleInterval, function(v) Routes.SampleInterval = v end)
-makeInput(SettingsTab, "Мин. расстояние между точками (studs)", Routes.MinDistance, function(v) Routes.MinDistance = v end)
-
 makeSection(SettingsTab, "ESP")
 makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Settings.Enabled = v end)
 makeToggle(SettingsTab, "Показывать имя", Settings.ShowName, function(v) Settings.ShowName = v end)
 makeToggle(SettingsTab, "Показывать здоровье", Settings.ShowHealth, function(v) Settings.ShowHealth = v end)
 makeToggle(SettingsTab, "Показывать дистанцию", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
 makeToggle(SettingsTab, "Показывать статус", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
-makeToggle(SettingsTab, "Проверка команды", Settings.TeamCheck, function(v) Settings.TeamCheck = v end)
-
-makeSection(SettingsTab, "ОТЛАДКА")
-makeToggle(SettingsTab, "Показывать индикатор клика", Settings.ShowClickIndicator, function(v)
-    Settings.ShowClickIndicator = v
-end)
-makeInput(SettingsTab, "Сдвиг по Y (если не попадает)", Settings.CrosshairOffsetY, function(v)
-    Settings.CrosshairOffsetY = v
-    log("Сдвиг по Y: " .. v, Theme.Warning)
-end)
-
-makeSection(SettingsTab, "КООРДИНАТЫ КНОПОК")
-
-local buttonLabelRefs = {}
-
-local function makeButtonSetter(name, key)
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
-    row.BorderSizePixel = 0
-    row.Parent = SettingsTab
-    addCorner(row, 8)
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Text = name
-    lbl.Size = UDim2.new(0.5, -12, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Theme.Text
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = row
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.5, -12, 0, 24)
-    btn.Position = UDim2.new(0.5, 0, 0.5, -12)
-    btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
-    btn.Text = Settings.Buttons[key] and "✓ Задано" or "Выбрать"
-    btn.TextColor3 = Theme.Text
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = row
-    addCorner(btn, 6)
-
-    btn.MouseButton1Click:Connect(function()
-        openCrosshairPicker(key, name)
-    end)
-    buttonLabelRefs[key] = {btn = btn, name = name}
-end
-
-getgenv().refreshButtonLabels = function()
-    for key, ref in pairs(buttonLabelRefs) do
-        local data = Settings.Buttons[key]
-        if data and data.Pos then
-            ref.btn.Text = string.format("✓ X=%d, Y=%d", data.Pos.X, data.Pos.Y)
-            ref.btn.BackgroundColor3 = Theme.Success
-        else
-            ref.btn.Text = "Выбрать"
-            ref.btn.BackgroundColor3 = Theme.Warning
-        end
-    end
-end
 
 -- ═══════════════════════════════════════════════════════
 -- 🎯 ПРИЦЕЛ
@@ -1074,7 +1097,6 @@ end
 local CrosshairGui = Instance.new("ScreenGui")
 CrosshairGui.Name = "ESP_Crosshair"
 CrosshairGui.ResetOnSpawn = false
-CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 CrosshairGui.IgnoreGuiInset = true
 CrosshairGui.DisplayOrder = 999
 CrosshairGui.Enabled = false
@@ -1082,14 +1104,12 @@ pcall(function() CrosshairGui.Parent = CoreGui end)
 if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local CrossHandle = Instance.new("TextButton")
-CrossHandle.Name = "CrossHandle"
 CrossHandle.Size = UDim2.new(0, 80, 0, 80)
 CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
 CrossHandle.BackgroundTransparency = 1
 CrossHandle.Text = ""
 CrossHandle.AutoButtonColor = false
 CrossHandle.Active = true
-CrossHandle.ZIndex = 100
 CrossHandle.Parent = CrosshairGui
 
 local CrossH = Instance.new("Frame")
@@ -1111,16 +1131,8 @@ CrossDot.Size = UDim2.new(0, 8, 0, 8)
 CrossDot.Position = UDim2.new(0.5, -4, 0.5, -4)
 CrossDot.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
 CrossDot.BorderSizePixel = 0
-CrossDot.ZIndex = 101
 CrossDot.Parent = CrossHandle
 addCorner(CrossDot, 4)
-
-local dotStroke = Instance.new("UIStroke")
-dotStroke.Color = Color3.fromRGB(0, 0, 0); dotStroke.Thickness = 2; dotStroke.Parent = CrossDot
-local hStroke = Instance.new("UIStroke")
-hStroke.Color = Color3.fromRGB(0, 0, 0); hStroke.Thickness = 2; hStroke.Parent = CrossH
-local vStroke = Instance.new("UIStroke")
-vStroke.Color = Color3.fromRGB(0, 0, 0); vStroke.Thickness = 2; vStroke.Parent = CrossV
 
 local isDragging = false
 local dragStart, startPos
@@ -1150,12 +1162,11 @@ CrossHandle.InputEnded:Connect(function(input)
 end)
 
 local CrossPanel = Instance.new("Frame")
-CrossPanel.Size = UDim2.new(0, 320, 0, 110)
-CrossPanel.Position = UDim2.new(0.5, -160, 1, -130)
+CrossPanel.Size = UDim2.new(0, 320, 0, 130)
+CrossPanel.Position = UDim2.new(0.5, -160, 1, -150)
 CrossPanel.BackgroundColor3 = Theme.Bg
 CrossPanel.BackgroundTransparency = 0.05
 CrossPanel.BorderSizePixel = 0
-CrossPanel.Active = true
 CrossPanel.ZIndex = 50
 CrossPanel.Parent = CrosshairGui
 addCorner(CrossPanel, 12)
@@ -1164,7 +1175,7 @@ makeDraggable(CrossPanel)
 
 local CrossTitleLbl = Instance.new("TextLabel")
 CrossTitleLbl.Text = "🎯 ПРИЦЕЛ"
-CrossTitleLbl.Size = UDim2.new(1, -20, 0, 26)
+CrossTitleLbl.Size = UDim2.new(1, -20, 0, 24)
 CrossTitleLbl.Position = UDim2.new(0, 10, 0, 6)
 CrossTitleLbl.BackgroundTransparency = 1
 CrossTitleLbl.TextColor3 = Theme.Text
@@ -1175,7 +1186,7 @@ CrossTitleLbl.Parent = CrossPanel
 
 local CoordLabel = Instance.new("TextLabel")
 CoordLabel.Size = UDim2.new(1, -20, 0, 22)
-CoordLabel.Position = UDim2.new(0, 10, 0, 34)
+CoordLabel.Position = UDim2.new(0, 10, 0, 32)
 CoordLabel.BackgroundTransparency = 1
 CoordLabel.Text = "X: —   Y: —"
 CoordLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
@@ -1183,18 +1194,31 @@ CoordLabel.Font = Enum.Font.Code
 CoordLabel.TextSize = 14
 CoordLabel.Parent = CrossPanel
 
+local OffsetInfo = Instance.new("TextLabel")
+OffsetInfo.Size = UDim2.new(1, -20, 0, 18)
+OffsetInfo.Position = UDim2.new(0, 10, 0, 54)
+OffsetInfo.BackgroundTransparency = 1
+OffsetInfo.Text = "Сдвиг X: 0  Y: 0"
+OffsetInfo.TextColor3 = Theme.TextDim
+OffsetInfo.Font = Enum.Font.Code
+OffsetInfo.TextSize = 11
+OffsetInfo.Parent = CrossPanel
+
 local SelectBtn = Instance.new("TextButton")
 SelectBtn.Text = "Выбрать (текущие координаты)"
-SelectBtn.Size = UDim2.new(1, -20, 0, 36)
-SelectBtn.Position = UDim2.new(0, 10, 1, -44)
+SelectBtn.Size = UDim2.new(1, -20, 0, 34)
+SelectBtn.Position = UDim2.new(0, 10, 1, -42)
 SelectBtn.BackgroundColor3 = Theme.Accent
 SelectBtn.TextColor3 = Theme.Text
 SelectBtn.Font = Enum.Font.GothamBold
-SelectBtn.TextSize = 13
+SelectBtn.TextSize = 12
 SelectBtn.BorderSizePixel = 0
 SelectBtn.AutoButtonColor = false
 SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
+
+local currentPickKey = nil
+local currentPickName = nil
 
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then return end
@@ -1202,17 +1226,13 @@ SelectBtn.MouseButton1Click:Connect(function()
     local x, y = math.floor(pos.X), math.floor(pos.Y)
     Settings.Buttons[currentPickKey] = {Pos = {X = x, Y = y}}
     log(string.format("✓ %s: X=%d, Y=%d", currentPickName, x, y), Theme.Success)
-    if getgenv().refreshButtonLabels then getgenv().refreshButtonLabels() end
     CrosshairGui.Enabled = false
     MainGui.Enabled = true
     currentPickKey = nil
     currentPickName = nil
 end)
 
-local currentPickKey = nil
-local currentPickName = nil
-
-local function openCrosshairPicker(key, displayName)
+function openCrosshairPicker(key, displayName)
     currentPickKey = key
     currentPickName = displayName
     CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — " .. displayName
@@ -1226,23 +1246,8 @@ RunService.RenderStepped:Connect(function()
     if not CrosshairGui.Enabled then return end
     local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
     CoordLabel.Text = string.format("X: %d   Y: %d", pos.X, pos.Y)
-end)
-
--- ═══════════════════════════════════════════════════════
--- 🎯 ЗАПИСЬ МАРШРУТА — ОСНОВНОЙ ЦИКЛ
--- ═══════════════════════════════════════════════════════
-RunService.Heartbeat:Connect(function()
-    if not Routes.Recording then return end
-    
-    local now = tick()
-    if now - Routes.LastSampleTime < Routes.SampleInterval then return end
-    Routes.LastSampleTime = now
-
-    local myChar = LocalPlayer.Character
-    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return end
-
-    recordPathPoint(myHRP.Position)
+    OffsetInfo.Text = string.format("Сдвиг X: %d  Y: %d", 
+        Settings.CrosshairOffsetX or 0, Settings.CrosshairOffsetY or 0)
 end)
 
 -- ═══════════════════════════════════════════════════════
@@ -1293,27 +1298,10 @@ local function createESP(player)
     distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     distLabel.Parent = billboard
 
-    local healthBg = Instance.new("Frame")
-    healthBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    healthBg.BorderSizePixel = 0
-    healthBg.Size = UDim2.new(0, 4, 1, 0)
-    healthBg.Position = UDim2.new(-0.05, 0, 0, 0)
-    healthBg.Parent = billboard
-
-    local healthFill = Instance.new("Frame")
-    healthFill.BackgroundColor3 = Settings.HealthColor
-    healthFill.BorderSizePixel = 0
-    healthFill.Size = UDim2.new(1, 0, 1, 0)
-    healthFill.AnchorPoint = Vector2.new(0, 1)
-    healthFill.Position = UDim2.new(0, 0, 1, 0)
-    healthFill.Parent = healthBg
-
     esp.Billboard = billboard
     esp.StatusLabel = statusLabel
     esp.NameLabel = nameLabel
     esp.DistLabel = distLabel
-    esp.HealthBg = healthBg
-    esp.HealthFill = healthFill
     esp.StatusText = ""
 
     ESPCache[player] = esp
@@ -1339,7 +1327,7 @@ local function clearPlayerStatus(player)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🔄 ОСНОВНОЙ ЦИКЛ ESP + АВТОДЕЙСТВИЯ
+-- 🔄 ОСНОВНОЙ ЦИКЛ
 -- ═══════════════════════════════════════════════════════
 RunService.RenderStepped:Connect(function(dt)
     -- ESP
@@ -1365,10 +1353,6 @@ RunService.RenderStepped:Connect(function(dt)
                     esp.DistLabel.Text = string.format("[%d m]", d)
                     esp.DistLabel.Visible = Settings.ShowDistance
                     esp.StatusLabel.Visible = Settings.ShowStatus and (esp.StatusText ~= "")
-                    local hp = hum.Health / hum.MaxHealth
-                    esp.HealthFill.Size = UDim2.new(1, 0, hp, 0)
-                    esp.HealthFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hp), 255 * hp, 0)
-                    esp.HealthBg.Visible = Settings.ShowHealth
                 end
             end
         end
@@ -1377,6 +1361,9 @@ RunService.RenderStepped:Connect(function(dt)
             if esp.Billboard then esp.Billboard.Enabled = false end
         end
     end
+
+    -- Door Watcher — проверяем изменения каждый кадр
+    checkDoorChanges()
 
     -- Автодействия
     if not Settings.AutoActions then return end
@@ -1387,6 +1374,7 @@ RunService.RenderStepped:Connect(function(dt)
         if now >= expireAt then IgnoredPlayers[p] = nil end
     end
 
+    -- IDLE
     if ActionState == "idle" then
         for _, p in pairs(Players:GetPlayers()) do
             if p ~= LocalPlayer and p.Character and not ProcessedPlayers[p] and not IgnoredPlayers[p] then
@@ -1428,6 +1416,31 @@ RunService.RenderStepped:Connect(function(dt)
         end
     end
 
+    -- Проверяем что target жив
+    if CurrentTarget and ActionState ~= "idle" then
+        if not CurrentTarget.Parent or not CurrentTarget.Character or not CurrentTarget.Character:FindFirstChild("HumanoidRootPart") then
+            log("💨 Игрок исчез — возврат на Home Position", Theme.Danger)
+            clearPlayerStatus(CurrentTarget)
+            
+            if RouteSettings.ReturnHomeOnPlayerLeft then
+                task.spawn(function()
+                    if Settings.DoDeactivate and Settings.Buttons.Deactivate then
+                        fireButtonAction(Settings.Buttons.Deactivate)
+                        task.wait(0.5)
+                    end
+                    if RouteSettings.HomePosition then
+                        teleportToHome()
+                    end
+                end)
+            end
+            
+            CurrentTarget = nil
+            ActionState = "idle"
+            StateTimer = 0
+        end
+    end
+
+    -- ACTIVATING
     if ActionState == "activating" and CurrentTarget then
         setPlayerStatus(CurrentTarget, "АКТИВАЦИЯ " .. math.floor(Settings.WaitAfterActivate - StateTimer) .. "с", Color3.fromRGB(255, 220, 80))
         if StateTimer >= Settings.WaitAfterActivate then
@@ -1446,13 +1459,11 @@ RunService.RenderStepped:Connect(function(dt)
                     ActionState = "waitLeft"
                     StateTimer = 0
                 end
-            else
-                ActionState = "waitLeft"
-                StateTimer = 0
             end
         end
     end
 
+    -- TICKET
     if ActionState == "ticket" and StateTimer >= Settings.WaitBeforeCheck then
         if CurrentTarget then setPlayerStatus(CurrentTarget, "ПРОВЕРКА ОРУЖИЯ", Color3.fromRGB(255, 180, 80)) end
         if Settings.DoCheckWeapon and Settings.Buttons.CheckWeapon then
@@ -1462,6 +1473,7 @@ RunService.RenderStepped:Connect(function(dt)
         StateTimer = 0
     end
 
+    -- WEAPON
     if ActionState == "weapon" and StateTimer >= Settings.WaitBeforeDeactivate then
         if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ", Color3.fromRGB(200, 130, 255)) end
         if Settings.DoDeactivate and Settings.Buttons.Deactivate then
@@ -1471,6 +1483,7 @@ RunService.RenderStepped:Connect(function(dt)
         StateTimer = 0
     end
 
+    -- WAIT LEFT
     if ActionState == "waitLeft" and StateTimer >= Settings.WaitLeftWithoutApproach then
         if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ (ушёл)", Color3.fromRGB(200, 130, 255)) end
         if Settings.DoDeactivate and Settings.Buttons.Deactivate then
@@ -1480,11 +1493,12 @@ RunService.RenderStepped:Connect(function(dt)
         StateTimer = 0
     end
 
+    -- COOLDOWN
     if ActionState == "cooldown" and StateTimer >= 5 then
         if CurrentTarget then
             clearPlayerStatus(CurrentTarget)
             IgnoredPlayers[CurrentTarget] = tick() + Settings.IgnoreDuration
-            log("🚫 " .. CurrentTarget.Name .. " в игноре на " .. Settings.IgnoreDuration .. "с", Theme.TextDim)
+            log("🚫 " .. CurrentTarget.Name .. " в игноре", Theme.TextDim)
         end
         CurrentTarget = nil
         ActionState = "idle"
@@ -1511,7 +1525,6 @@ for _, p in pairs(Players:GetPlayers()) do createESP(p) end
 -- ═══════════════════════════════════════════════════════
 local tabs = {
     {Name = "Консоль", Frame = ConsoleTab},
-    {Name = "Маршруты", Frame = RoutesTab},
     {Name = "Тест", Frame = TestTab},
     {Name = "Настройки", Frame = SettingsTab},
 }
@@ -1535,7 +1548,7 @@ for i, tab in ipairs(tabs) do
     btn.BackgroundColor3 = Theme.BgLighter
     btn.TextColor3 = Theme.Text
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
+    btn.TextSize = 13
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
     btn.Parent = TabBar
@@ -1550,7 +1563,7 @@ local originalSize = MainFrame.Size
 MinimizeBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 460, 0, 42)}):Play()
+        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 480, 0, 42)}):Play()
         ContentFrame.Visible = false
         TabBar.Visible = false
     else
@@ -1565,20 +1578,27 @@ CloseBtn.MouseButton1Click:Connect(function()
     log("UI скрыт. Вернуть: getgenv().ShowUI()", Theme.Warning)
 end)
 
-getgenv().refreshRoomLabel = function()
-    roomLabel.Text = "КОМНАТА " .. Routes.RecordingRoom
-end
-
 -- ═══════════════════════════════════════════════════════
--- 🌐 ПУБЛИЧНОЕ API
+-- 🌐 API
 -- ═══════════════════════════════════════════════════════
 getgenv().ESP = {
     Settings = Settings,
-    Routes = Routes,
+    RouteSettings = RouteSettings,
+    Doors = Doors,
     Toggle = function() Settings.Enabled = not Settings.Enabled end,
+    GoToRoom = goToRoom,
+    GoToNextRoom = goToNextRoom,
+    FindDoors = findDoors,
+    InitWatcher = initDoorWatcher,
+    SetHome = setHomePosition,
+    RememberHome = rememberHomeFromNow,
+    TeleportHome = teleportToHome,
+    ClickNumberUp = function()
+        local btns = findButtonByName("NumberUp")
+        for _, b in ipairs(btns) do tryClickGuiButton(b) end
+    end,
     Destroy = function()
         for p, _ in pairs(ESPCache) do removeESP(p) end
-        clearVisuals()
         pcall(function() MainGui:Destroy() end)
         pcall(function() CrosshairGui:Destroy() end)
         pcall(function() ClickIndicatorGui:Destroy() end)
@@ -1589,5 +1609,7 @@ getgenv().ESP = {
 getgenv().ShowUI = function() MainGui.Enabled = true end
 getgenv().HideUI = function() MainGui.Enabled = false end
 
-log("✅ Скрипт загружен!", Theme.Success)
-log("Вкладка «Маршруты» — запись пути", Theme.Warning)
+log("✅ Скрипт v7.1 загружен!", Theme.Success)
+log("Сдвиг X/Y в Настройках", Theme.Warning)
+log("Home Position — запомни через кнопку в Тесте", Theme.Warning)
+log("Watcher дверей — включи и следи за RoomExit", Theme.Success)
