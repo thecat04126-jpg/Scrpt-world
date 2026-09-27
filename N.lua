@@ -1,6 +1,6 @@
 --[[
     N.lua — ESP + AUTO ACTIONS + ROUTES + DOOR WATCHER
-    Версия: 8.2 (исправлены ошибки)
+    Версия: 8.3 (исправлены все баги, кнопки на месте)
     Для Delta Executor
 --]]
 
@@ -116,7 +116,7 @@ local InitialDistance = 0
 local ProcessedPlayers = {}
 local IgnoredPlayers = {}
 local Queue = {}
-local CurrentTarget = nil  -- ✅ ИСПРАВЛЕНО: объявлена переменная
+local CurrentTarget = nil
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -404,6 +404,7 @@ local function teleportAlongPath(path)
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myHRP then return false end
     for _, point in ipairs(path) do
+        if not myHRP or not myHRP.Parent then return false end
         myHRP.CFrame = CFrame.new(point)
         task.wait(RouteSettings.StepDelay)
     end
@@ -467,9 +468,9 @@ local function onDoorOpened(roomNum)
     task.spawn(function()
         if Settings.Buttons.NumberUp and Settings.Buttons.NumberUp.Pos then
             log("Method 1: tap by coords", Theme.TextDim)
-            for i = 1, RouteSettings.NumberUpRetryCount do
+            for i = 1, (RouteSettings.NumberUpRetryCount or 3) do
                 fireButtonAction(Settings.Buttons.NumberUp)
-                task.wait(RouteSettings.NumberUpRetryDelay)
+                task.wait(RouteSettings.NumberUpRetryDelay or 0.5)
             end
         end
 
@@ -579,7 +580,7 @@ TitleIcon.TextXAlignment = Enum.TextXAlignment.Left
 TitleIcon.Parent = TitleBar
 
 local Title = Instance.new("TextLabel")
-Title.Text = "ESP + AUTO ACTIONS v8.2"
+Title.Text = "ESP + AUTO ACTIONS v8.3"
 Title.Size = UDim2.new(1, -150, 1, 0)
 Title.Position = UDim2.new(0, 60, 0, 0)
 Title.BackgroundTransparency = 1
@@ -935,9 +936,11 @@ SelectBtn.AutoButtonColor = false
 SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
 
+-- ✅ ВАЖНО: объявляем переменные ЗАРАНЕЕ, чтобы замыкания их видели
 local currentPickKey = nil
 local currentPickName = nil
 local refreshButtonLabels = function() end
+local openCrosshairPicker -- объявляем, значение присвоим позже
 
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then return end
@@ -954,7 +957,8 @@ SelectBtn.MouseButton1Click:Connect(function()
     currentPickName = nil
 end)
 
-local openCrosshairPicker = function(key, displayName)
+-- ✅ присваиваем значение (замыкание уже видит переменную)
+openCrosshairPicker = function(key, displayName)
     currentPickKey = key
     currentPickName = displayName
     CrossTitleLbl.Text = "CROSSHAIR - " .. displayName
@@ -1234,21 +1238,27 @@ local function makeButtonSetter(name, key)
     addCorner(btn, 6)
 
     btn.MouseButton1Click:Connect(function()
-        openCrosshairPicker(key, name)
+        -- ✅ openCrosshairPicker уже объявлена заранее
+        if openCrosshairPicker then
+            openCrosshairPicker(key, name)
+        end
     end)
 
     buttonLabelRefs[key] = {btn = btn, name = name}
 end
 
+-- ✅ переопределяем refreshButtonLabels (объявлена ранее как пустая функция)
 refreshButtonLabels = function()
     for key, ref in pairs(buttonLabelRefs) do
-        local data = Settings.Buttons[key]
-        if data and data.Pos then
-            ref.btn.Text = string.format("X=%d Y=%d", data.Pos.X, data.Pos.Y)
-            ref.btn.BackgroundColor3 = Theme.Success
-        else
-            ref.btn.Text = "Select"
-            ref.btn.BackgroundColor3 = Theme.Warning
+        if ref and ref.btn then
+            local data = Settings.Buttons[key]
+            if data and data.Pos then
+                ref.btn.Text = string.format("X=%d Y=%d", data.Pos.X, data.Pos.Y)
+                ref.btn.BackgroundColor3 = Theme.Success
+            else
+                ref.btn.Text = "Select"
+                ref.btn.BackgroundColor3 = Theme.Warning
+            end
         end
     end
 end
@@ -1544,7 +1554,9 @@ end)
 -- ═══════════════════════════════════════════════════════
 -- 🎧 СОБЫТИЯ
 -- ═══════════════════════════════════════════════════════
-Players.PlayerAdded:Connect(createESP)
+Players.PlayerAdded:Connect(function(player)
+    createESP(player)
+end)
 Players.PlayerRemoving:Connect(function(player)
     removeESP(player)
     ProcessedPlayers[player] = nil
@@ -1650,6 +1662,6 @@ getgenv().HideUI = function()
     CrosshairGui.Enabled = false
 end
 
-log("Script v8.2 loaded!", Theme.Success)
+log("Script v8.3 loaded!", Theme.Success)
 log("Settings -> BUTTON COORDS for coordinates", Theme.Warning)
 log("Crosshair: press Select", Theme.Warning)
