@@ -1,7 +1,7 @@
 --[[
     PLAYERS ESP + AUTO ACTIONS + UI
-    Версия: 3.6 (для телефона, точный тап + индикатор клика)
-    Для Delta Executor
+    Версия: 4.0 (очередь, игнор 40с, статус над игроками, автосдвиг)
+    Для Delta Executor (телефон)
 --]]
 
 if getgenv().ESP_LOADED then
@@ -19,6 +19,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -48,6 +49,7 @@ local Settings = {
     ShowName = true,
     ShowHealth = true,
     ShowDistance = true,
+    ShowStatus = true,          -- ⬅️ НОВОЕ: статус над игроком
     TeamCheck = false,
     MaxDistance = 1000,
     NameColor = Color3.fromRGB(255, 255, 255),
@@ -66,6 +68,8 @@ local Settings = {
     WaitBeforeCheck = 3,
     WaitBeforeDeactivate = 3,
     WaitLeftWithoutApproach = 5,
+    QueueDelay = 5,             -- ⬅️ НОВОЕ: задержка между игроками
+    IgnoreDuration = 40,        -- ⬅️ НОВОЕ: игнор после деактивации (сек)
 
     Buttons = {
         Activate = nil,
@@ -76,14 +80,16 @@ local Settings = {
 
     CrosshairColor = Color3.fromRGB(0, 255, 100),
     ShowClickIndicator = true,
+    CrosshairOffsetY = 0,
 }
 
 local ESPCache = {}
-local CurrentTarget = nil
 local ActionState = "idle"
 local StateTimer = 0
 local InitialDistance = 0
-local ProcessedPlayers = {}
+local ProcessedPlayers = {}     -- {[player] = true} — для одноразовой обработки
+local IgnoredPlayers = {}       -- {[player] = timestamp} — когда можно снова обрабатывать
+local Queue = {}                -- очередь игроков: {player1, player2, ...}
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -163,7 +169,7 @@ local function log(text, color)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 ИНДИКАТОР КЛИКА (красный круг — видно, куда попал тап)
+-- 🎯 ИНДИКАТОР КЛИКА
 -- ═══════════════════════════════════════════════════════
 local ClickIndicatorGui = Instance.new("ScreenGui")
 ClickIndicatorGui.Name = "ESP_ClickIndicator"
@@ -175,7 +181,6 @@ if not ClickIndicatorGui.Parent then ClickIndicatorGui.Parent = LocalPlayer:Wait
 
 local function showClickIndicator(x, y)
     if not Settings.ShowClickIndicator then return end
-    
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0, 40, 0, 40)
     dot.Position = UDim2.new(0, x - 20, 0, y - 20)
@@ -185,12 +190,7 @@ local function showClickIndicator(x, y)
     dot.BorderColor3 = Color3.fromRGB(255, 255, 0)
     dot.ZIndex = 10000
     dot.Parent = ClickIndicatorGui
-    
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(1, 0)
-    c.Parent = dot
-    
-    -- Анимация исчезновения
+    addCorner(dot, 20)
     task.spawn(function()
         task.wait(0.8)
         TweenService:Create(dot, TweenInfo.new(0.4), {
@@ -204,48 +204,47 @@ local function showClickIndicator(x, y)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🖱️ ТОЧНЫЙ ТАП ПО КООРДИНАТАМ (для телефона)
+-- 🖱️ ТОЧНЫЙ ТАП С УЧЁТОМ ИНСЕТА
 -- ═══════════════════════════════════════════════════════
 local function clickAtScreenPosition(x, y)
     if not x or not y then return false end
-    if x < 0 or y < 0 then return false end
+    local topInset = GuiService:GetGuiInset().Y
+    local realY = y + topInset + (Settings.CrosshairOffsetY or 0)
+    showClickIndicator(x, realY)
 
-    -- Показываем визуальный индикатор
-    showClickIndicator(x, y)
-
-    -- Метод 1: Delta — tap (для мобильных)
     local used = false
     pcall(function()
         if typeof(tap) == "function" then
-            tap(x, y)
-            used = true
+            tap(x, realY); used = true
         end
     end)
     if used then return true end
 
-    -- Метод 2: Delta — touch
     pcall(function()
         if typeof(touch) == "function" then
-            touch(x, y)
-            used = true
+            touch(x, realY); used = true
         end
     end)
     if used then return true end
 
-    -- Метод 3: SendTouchEvent (тап пальцем)
     pcall(function()
-        local VIM = game:GetService("VirtualInputManager")
-        VIM:SendTouchEvent(Enum.UserInputType.Touch, Enum.UserInputState.Begin, Vector2.new(x, y))
+        VirtualInputManager:SendTouchEvent(
+            Enum.UserInputType.Touch,
+            Enum.UserInputState.Begin,
+            Vector2.new(x, realY)
+        )
         task.wait(0.08)
-        VIM:SendTouchEvent(Enum.UserInputType.Touch, Enum.UserInputState.End, Vector2.new(x, y))
+        VirtualInputManager:SendTouchEvent(
+            Enum.UserInputType.Touch,
+            Enum.UserInputState.End,
+            Vector2.new(x, realY)
+        )
     end)
 
-    -- Метод 4: SendMouseButtonEvent (для игр с поддержкой мыши)
     pcall(function()
-        local VIM = game:GetService("VirtualInputManager")
-        VIM:SendMouseButtonEvent(x, y, 0, true, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(x, realY, 0, true, game, 1)
         task.wait(0.05)
-        VIM:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(x, realY, 0, false, game, 1)
     end)
 
     return true
@@ -255,16 +254,10 @@ end
 -- 🎯 ВЫПОЛНЕНИЕ ДЕЙСТВИЯ
 -- ═══════════════════════════════════════════════════════
 function fireButtonAction(btnData)
-    if not btnData then return false end
-
-    if btnData.Pos then
-        local x, y = btnData.Pos.X, btnData.Pos.Y
-        clickAtScreenPosition(x, y)
-        log("✓ Тап X=" .. x .. ", Y=" .. y, Theme.Success)
-        return true
-    end
-
-    return false
+    if not btnData or not btnData.Pos then return false end
+    clickAtScreenPosition(btnData.Pos.X, btnData.Pos.Y)
+    log("✓ Тап X=" .. btnData.Pos.X .. ", Y=" .. btnData.Pos.Y, Theme.Success)
+    return true
 end
 
 -- ═══════════════════════════════════════════════════════
@@ -294,7 +287,6 @@ TitleBar.BackgroundColor3 = Theme.BgLight
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
 addCorner(TitleBar, 12)
-
 local TitleFix = Instance.new("Frame")
 TitleFix.Size = UDim2.new(1, 0, 0, 12)
 TitleFix.Position = UDim2.new(0, 0, 1, -12)
@@ -316,6 +308,299 @@ local Title = Instance.new("TextLabel")
 Title.Text = "ESP  •  AUTO ACTIONS"
 Title.Size = UDim2.new(1, -150, 1, 0)
 Title.Position = UDim2.new(0, 46, 0, 0)
+Title.BackgroundTransparency = 1
+Title.TextColor3 = Theme.Text
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 15
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = TitleBar
+
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Text = "—"
+MinimizeBtn.Size = UDim2.new(0, 28, 0, 28)
+MinimizeBtn.Position = UDim2.new(1, -66, 0.5, -14)
+MinimizeBtn.BackgroundColor3 = Theme.BgLighter
+MinimizeBtn.TextColor3 = Theme.Text
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.TextSize = 16
+MinimizeBtn.BorderSizePixel = 0
+MinimizeBtn.Parent = TitleBar
+addCorner(MinimizeBtn, 6)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Text = "✕"
+CloseBtn.Size = UDim2.new(0, 28, 0, 28)
+CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
+CloseBtn.BackgroundColor3 = Theme.Danger
+CloseBtn.TextColor3 = Theme.Text
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Parent = TitleBar
+addCorner(CloseBtn, 6)
+
+local TabBar = Instance.new("Frame")
+TabBar.Size = UDim2.new(1, -24, 0, 36)
+TabBar.Position = UDim2.new(0, 12, 0, 50)
+TabBar.BackgroundColor3 = Theme.BgLight
+TabBar.BorderSizePixel = 0
+TabBar.Parent = MainFrame
+addCorner(TabBar, 8)
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Size = UDim2.new(1, -24, 1, -108)
+ContentFrame.Position = UDim2.new(0, 12, 0, 94)
+ContentFrame.BackgroundColor3 = Theme.BgLight
+ContentFrame.BorderSizePixel = 0
+ContentFrame.Parent = MainFrame
+addCorner(ContentFrame, 10)
+
+ConsoleTab = Instance.new("ScrollingFrame")
+ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
+ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
+ConsoleTab.BackgroundTransparency = 1
+ConsoleTab.BorderSizePixel = 0
+ConsoleTab.ScrollBarThickness = 5
+ConsoleTab.ScrollBarImageColor3 = Theme.Accent
+ConsoleTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+ConsoleTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ConsoleTab.Visible = true
+ConsoleTab.Parent = ContentFrame
+
+local ConsoleLayout = Instance.new("UIListLayout")
+ConsoleLayout.Padding = UDim.new(0, 3)
+ConsoleLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ConsoleLayout.Parent = ConsoleTab
+
+log("Консоль инициализирована", Theme.TextDim)
+
+local TestTab = Instance.new("ScrollingFrame")
+TestTab.Size = UDim2.new(1, -12, 1, -12)
+TestTab.Position = UDim2.new(0, 6, 0, 6)
+TestTab.BackgroundTransparency = 1
+TestTab.BorderSizePixel = 0
+TestTab.ScrollBarThickness = 5
+TestTab.ScrollBarImageColor3 = Theme.Accent
+TestTab.CanvasSize = UDim2.new(0, 0, 0, 700)
+TestTab.Visible = false
+TestTab.Parent = ContentFrame
+
+local TestLayout = Instance.new("UIListLayout")
+TestLayout.Padding = UDim.new(0, 8)
+TestLayout.Parent = TestTab
+
+local SettingsTab = Instance.new("ScrollingFrame")
+SettingsTab.Size = UDim2.new(1, -12, 1, -12)
+SettingsTab.Position = UDim2.new(0, 6, 0, 6)
+SettingsTab.BackgroundTransparency = 1
+SettingsTab.BorderSizePixel = 0
+SettingsTab.ScrollBarThickness = 5
+SettingsTab.ScrollBarImageColor3 = Theme.Accent
+SettingsTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+SettingsTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
+SettingsTab.Visible = false
+SettingsTab.Parent = ContentFrame
+
+local SettingsLayout = Instance.new("UIListLayout")
+SettingsLayout.Padding = UDim.new(0, 6)
+SettingsLayout.Parent = SettingsTab
+
+-- ═══════════════════════════════════════════════════════
+-- 🧱 UI-КОМПОНЕНТЫ
+-- ═══════════════════════════════════════════════════════
+local function makeSection(text)
+    local s = Instance.new("TextLabel")
+    s.Text = "  " .. text
+    s.Size = UDim2.new(1, 0, 0, 26)
+    s.BackgroundColor3 = Theme.Bg
+    s.TextColor3 = Theme.Accent
+    s.Font = Enum.Font.GothamBold
+    s.TextSize = 12
+    s.TextXAlignment = Enum.TextXAlignment.Left
+    s.BorderSizePixel = 0
+    s.Parent = SettingsTab
+    addCorner(s, 6)
+    return s
+end
+
+local function makeButton(parent, text, callback, color)
+    local btn = Instance.new("TextButton")
+    btn.Text = text
+    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.BackgroundColor3 = color or Theme.BgLighter
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 13
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = parent
+    addCorner(btn, 8)
+    btn:SetAttribute("BaseColor", color or Theme.BgLighter)
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Theme.AccentHover
+        }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = btn:GetAttribute("BaseColor")
+        }):Play()
+    end)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local function makeToggle(parent, text, default, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Theme.Bg
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    addCorner(row, 8)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Text = text
+    lbl.Size = UDim2.new(1, -80, 1, 0)
+    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Theme.Text
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 13
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local state = default
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.new(0, 54, 0, 22)
+    toggle.Position = UDim2.new(1, -64, 0.5, -11)
+    toggle.BackgroundColor3 = state and Theme.Success or Theme.BgLighter
+    toggle.Text = state and "ВКЛ" or "ВЫКЛ"
+    toggle.TextColor3 = Theme.Text
+    toggle.Font = Enum.Font.GothamBold
+    toggle.TextSize = 11
+    toggle.BorderSizePixel = 0
+    toggle.AutoButtonColor = false
+    toggle.Parent = row
+    addCorner(toggle, 11)
+    toggle.MouseButton1Click:Connect(function()
+        state = not state
+        TweenService:Create(toggle, TweenInfo.new(0.15), {
+            BackgroundColor3 = state and Theme.Success or Theme.BgLighter
+        }):Play()
+        toggle.Text = state and "ВКЛ" or "ВЫКЛ"
+        callback(state)
+    end)
+    return row
+end
+
+local function makeInput(parent, text, default, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Theme.Bg
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    addCorner(row, 8)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Text = text
+    lbl.Size = UDim2.new(0.55, -12, 1, 0)
+    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Theme.Text
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local input = Instance.new("TextBox")
+    input.Size = UDim2.new(0.45, -12, 0, 24)
+    input.Position = UDim2.new(0.55, 0, 0.5, -12)
+    input.BackgroundColor3 = Theme.BgLighter
+    input.Text = tostring(default)
+    input.TextColor3 = Theme.Text
+    input.Font = Enum.Font.Gotham
+    input.TextSize = 12
+    input.BorderSizePixel = 0
+    input.ClearTextOnFocus = false
+    input.Parent = row
+    addCorner(input, 6)
+
+    input.FocusLost:Connect(function()
+        local num = tonumber(input.Text)
+        if num then callback(num) end
+    end)
+    return row
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🎯 ПРИЦЕЛ
+-- ═══════════════════════════════════════════════════════
+local CrosshairGui = Instance.new("ScreenGui")
+CrosshairGui.Name = "ESP_Crosshair"
+CrosshairGui.ResetOnSpawn = false
+CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+CrosshairGui.IgnoreGuiInset = true
+CrosshairGui.DisplayOrder = 999
+CrosshairGui.Enabled = false
+pcall(function() CrosshairGui.Parent = CoreGui end)
+if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local CrossHandle = Instance.new("TextButton")
+CrossHandle.Name = "CrossHandle"
+CrossHandle.Size = UDim2.new(0, 80, 0, 80)
+CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
+CrossHandle.BackgroundTransparency = 1
+CrossHandle.Text = ""
+CrossHandle.AutoButtonColor = false
+CrossHandle.Active = true
+CrossHandle.ZIndex = 100
+CrossHandle.Parent = CrosshairGui
+
+local CrossH = Instance.new("Frame")
+CrossH.Size = UDim2.new(0, 60, 0, 2)
+CrossH.Position = UDim2.new(0.5, -30, 0.5, -1)
+CrossH.BackgroundColor3 = Settings.CrosshairColor
+CrossH.BorderSizePixel = 0
+CrossH.Parent = CrossHandle
+
+local CrossV = Instance.new("Frame")
+CrossV.Size = UDim2.new(0, 2, 0, 60)
+CrossV.Position = UDim2.new(0.5, -1, 0.5, -30)
+CrossV.BackgroundColor3 = Settings.CrosshairColor
+CrossV.BorderSizePixel = 0
+CrossV.Parent = CrossHandle
+
+local CrossDot = Instance.new("Frame")
+CrossDot.Size = UDim2.new(0, 8, 0, 8)
+CrossDot.Position = UDim2.new(0.5, -4, 0.5, -4)
+CrossDot.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+CrossDot.BorderSizePixel = 0
+CrossDot.ZIndex = 101
+CrossDot.Parent = CrossHandle
+addCorner(CrossDot, 4)
+
+local dotStroke = Instance.new("UIStroke")
+dotStroke.Color = Color3.fromRGB(0, 0, 0); dotStroke.Thickness = 2; dotStroke.Parent = CrossDot
+local hStroke = Instance.new("UIStroke")
+hStroke.Color = Color3.fromRGB(0, 0, 0); hStroke.Thickness = 2; hStroke.Parent = CrossH
+local vStroke = Instance.new("UIStroke")
+vStroke.Color = Color3.fromRGB(0, 0, 0); vStroke.Thickness = 2; vStroke.Parent = CrossV
+
+local isDragging = false
+local dragStart, startPos
+CrossHandle.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
+        isDragging = true
+        dragStart = input.Position
+        startPos = CrossHandle.Position
+    end
+end)
+CrossHandle.InputChanged:Connect(function(input)
+    if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+       or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+ition = UDim2.new(0, 46, 0, 0)
 Title.BackgroundTransparency = 1
 Title.TextColor3 = Theme.Text
 Title.Font = Enum.Font.GothamBold
