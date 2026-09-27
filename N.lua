@@ -1,6 +1,6 @@
 --[[
-    PLAYERS ESP + AUTO ACTIONS + UI
-    Версия: 4.0 (очередь, игнор 40с, статус над игроками, автосдвиг)
+    PLAYERS ESP + AUTO ACTIONS + UI + ROUTES
+    Версия: 5.0 (запись маршрутов + визуализация)
     Для Delta Executor (телефон)
 --]]
 
@@ -39,6 +39,9 @@ local Theme = {
     Text        = Color3.fromRGB(240, 240, 245),
     TextDim     = Color3.fromRGB(150, 150, 165),
     Border      = Color3.fromRGB(60, 60, 80),
+    Record      = Color3.fromRGB(255, 60, 60),
+    StopPoint   = Color3.fromRGB(255, 30, 30),
+    PathColor   = Color3.fromRGB(0, 220, 100),
 }
 
 -- ═══════════════════════════════════════════════════════
@@ -49,7 +52,7 @@ local Settings = {
     ShowName = true,
     ShowHealth = true,
     ShowDistance = true,
-    ShowStatus = true,          -- ⬅️ НОВОЕ: статус над игроком
+    ShowStatus = true,
     TeamCheck = false,
     MaxDistance = 1000,
     NameColor = Color3.fromRGB(255, 255, 255),
@@ -68,14 +71,15 @@ local Settings = {
     WaitBeforeCheck = 3,
     WaitBeforeDeactivate = 3,
     WaitLeftWithoutApproach = 5,
-    QueueDelay = 5,             -- ⬅️ НОВОЕ: задержка между игроками
-    IgnoreDuration = 40,        -- ⬅️ НОВОЕ: игнор после деактивации (сек)
+    QueueDelay = 5,
+    IgnoreDuration = 40,
 
     Buttons = {
         Activate = nil,
         GiveTicket = nil,
         CheckWeapon = nil,
         Deactivate = nil,
+        IncreaseNumber = nil,
     },
 
     CrosshairColor = Color3.fromRGB(0, 255, 100),
@@ -87,9 +91,31 @@ local ESPCache = {}
 local ActionState = "idle"
 local StateTimer = 0
 local InitialDistance = 0
-local ProcessedPlayers = {}     -- {[player] = true} — для одноразовой обработки
-local IgnoredPlayers = {}       -- {[player] = timestamp} — когда можно снова обрабатывать
-local Queue = {}                -- очередь игроков: {player1, player2, ...}
+local ProcessedPlayers = {}
+local IgnoredPlayers = {}
+local Queue = {}
+
+-- ═══════════════════════════════════════════════════════
+-- 🗺️ СИСТЕМА МАРШРУТОВ
+-- ═══════════════════════════════════════════════════════
+local Routes = {
+    Recording = false,          -- идёт ли запись
+    RecordingRoom = "0001",     -- в какой комнате пишем
+    PathPoints = {},            -- все точки пути {Vector3}
+    StopPoints = {},            -- точки остановки {Vector3, Number}
+    Saved = {},                 -- {["0001"] = {Path={...}, Stops={...}}, ...}
+    CurrentRoom = "0001",       -- в какой комнате мы сейчас
+    LastSampleTime = 0,
+    SampleInterval = 0.1,       -- как часто записывать точки (сек)
+    MinDistance = 2,            -- минимальное расстояние между точками (studs)
+}
+
+-- Цвета для визуализации маршрутов
+local RouteVisuals = {
+    PathParts = {},         -- части линии пути
+    StopMarkers = {},       -- маркеры остановок
+    Folder = nil,
+}
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -204,7 +230,7 @@ local function showClickIndicator(x, y)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🖱️ ТОЧНЫЙ ТАП С УЧЁТОМ ИНСЕТА
+-- 🖱️ ТОЧНЫЙ ТАП
 -- ═══════════════════════════════════════════════════════
 local function clickAtScreenPosition(x, y)
     if not x or not y then return false end
@@ -250,14 +276,215 @@ local function clickAtScreenPosition(x, y)
     return true
 end
 
--- ═══════════════════════════════════════════════════════
--- 🎯 ВЫПОЛНЕНИЕ ДЕЙСТВИЯ
--- ═══════════════════════════════════════════════════════
 function fireButtonAction(btnData)
     if not btnData or not btnData.Pos then return false end
     clickAtScreenPosition(btnData.Pos.X, btnData.Pos.Y)
     log("✓ Тап X=" .. btnData.Pos.X .. ", Y=" .. btnData.Pos.Y, Theme.Success)
     return true
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🗺️ ФУНКЦИИ МАРШРУТОВ
+-- ═══════════════════════════════════════════════════════
+
+-- Создание папки для визуализации
+local function createRouteFolder()
+    if RouteVisuals.Folder and RouteVisuals.Folder.Parent then
+        RouteVisuals.Folder:Destroy()
+    end
+    local folder = Instance.new("Folder")
+    folder.Name = "ESP_Routes"
+    folder.Parent = workspace
+    RouteVisuals.Folder = folder
+    RouteVisuals.PathParts = {}
+    RouteVisuals.StopMarkers = {}
+end
+
+-- Очистить визуализацию
+local function clearVisuals()
+    for _, part in pairs(RouteVisuals.PathParts) do
+        pcall(function() part:Destroy() end)
+    end
+    for _, marker in pairs(RouteVisuals.StopMarkers) do
+        pcall(function() marker:Destroy() end)
+    end
+    RouteVisuals.PathParts = {}
+    RouteVisuals.StopMarkers = {}
+end
+
+-- Создать сегмент пути (линия на полу)
+local function createPathSegment(fromPos, toPos)
+    local dist = (toPos - fromPos).Magnitude
+    if dist < 0.5 then return end
+
+    local part = Instance.new("Part")
+    part.Name = "PathSegment"
+    part.Anchored = true
+    part.CanCollide = false
+    part.Material = Enum.Material.Neon
+    part.Color = Theme.PathColor
+    part.Transparency = 0.3
+    part.Size = Vector3.new(0.5, 0.2, dist)
+    part.CFrame = CFrame.new((fromPos + toPos) / 2, toPos) * CFrame.Angles(0, math.rad(90), 0)
+    part.CFrame = CFrame.new((fromPos + toPos) / 2, toPos)
+    part.Parent = RouteVisuals.Folder
+    table.insert(RouteVisuals.PathParts, part)
+end
+
+-- Создать маркер остановки (красный круг с цифрой)
+local function createStopMarker(position, number)
+    -- Круг на полу
+    local circle = Instance.new("Part")
+    circle.Name = "StopMarker_" .. number
+    circle.Shape = Enum.PartType.Cylinder
+    circle.Anchored = true
+    circle.CanCollide = false
+    circle.Material = Enum.Material.Neon
+    circle.Color = Theme.StopPoint
+    circle.Transparency = 0.3
+    circle.Size = Vector3.new(0.3, 8, 8)  -- толщина, диаметр, диаметр
+    circle.CFrame = CFrame.new(position + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
+    circle.Parent = RouteVisuals.Folder
+    table.insert(RouteVisuals.StopMarkers, circle)
+
+    -- Цифра (BillboardGui)
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "StopNumber"
+    billboard.Size = UDim2.new(0, 60, 0, 60)
+    billboard.StudsOffset = Vector3.new(0, 4, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = circle
+    billboard.Parent = circle
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = tostring(number)
+    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    lbl.TextStrokeTransparency = 0
+    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 42
+    lbl.Parent = billboard
+end
+
+-- Записать точку пути
+local function recordPathPoint(position)
+    local lastPoint = RouteVisuals.PathParts[#RouteVisuals.PathParts]
+    if lastPoint then
+        local lastPos = lastPoint.Position
+        if (position - lastPos).Magnitude < Routes.MinDistance then
+            return  -- слишком близко, пропускаем
+        end
+    end
+
+    table.insert(Routes.PathPoints, position)
+    if #Routes.PathPoints > 1 then
+        createPathSegment(Routes.PathPoints[#Routes.PathPoints - 1], position)
+    end
+end
+
+-- Добавить точку остановки (текущая позиция игрока)
+local function addStopPoint()
+    local myChar = LocalPlayer.Character
+    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then
+        log("❌ Нет персонажа", Theme.Danger)
+        return
+    end
+
+    local pos = myHRP.Position
+    local number = #Routes.StopPoints + 1
+    table.insert(Routes.StopPoints, {Pos = pos, Number = number})
+    createStopMarker(pos, number)
+    log("🔴 Точка остановки #" .. number .. " добавлена", Theme.Warning)
+end
+
+-- Начать запись
+local function startRecording()
+    if Routes.Recording then return end
+    Routes.Recording = true
+    Routes.PathPoints = {}
+    Routes.StopPoints = {}
+    Routes.LastSampleTime = 0
+    createRouteFolder()
+    log("🔴 ЗАПИСЬ НАЧАТА — комната " .. Routes.RecordingRoom, Theme.Danger)
+end
+
+-- Остановить запись
+local function stopRecording()
+    if not Routes.Recording then return end
+    Routes.Recording = false
+    log("⏹ ЗАПИСЬ ОСТАНОВЛЕНА — точек: " .. #Routes.PathPoints .. ", остановок: " .. #Routes.StopPoints, Theme.Warning)
+end
+
+-- Зафиксировать маршрут
+local function saveRoute()
+    if #Routes.PathPoints == 0 and #Routes.StopPoints == 0 then
+        log("❌ Маршрут пустой", Theme.Danger)
+        return
+    end
+
+    Routes.Saved[Routes.RecordingRoom] = {
+        Path = Routes.PathPoints,
+        Stops = Routes.StopPoints,
+        SavedAt = os.time(),
+    }
+
+    log("💾 Маршрут комнаты " .. Routes.RecordingRoom .. " сохранён (" .. #Routes.PathPoints .. " точек, " .. #Routes.StopPoints .. " остановок)", Theme.Success)
+end
+
+-- Загрузить маршрут комнаты
+local function loadRoute(roomName)
+    local route = Routes.Saved[roomName]
+    if not route then
+        log("❌ Маршрут комнаты " .. roomName .. " не найден", Theme.Danger)
+        return false
+    end
+
+    Routes.PathPoints = route.Path
+    Routes.StopPoints = route.Stops
+    createRouteFolder()
+
+    -- Восстанавливаем визуализацию
+    for i = 2, #route.Path do
+        createPathSegment(route.Path[i-1], route.Path[i])
+    end
+    for _, stop in ipairs(route.Stops) do
+        createStopMarker(stop.Pos, stop.Number)
+    end
+
+    log("📂 Маршрут " .. roomName .. " загружен (" .. #route.Path .. " точек)", Theme.Success)
+    return true
+end
+
+-- Переключить номер комнаты (+1)
+local function nextRoom()
+    local num = tonumber(Routes.RecordingRoom) or 1
+    num = num + 1
+    Routes.RecordingRoom = string.format("%04d", num)
+    return Routes.RecordingRoom
+end
+
+-- Телепорт к точке остановки
+local function teleportToStop(index)
+    local route = Routes.Saved[Routes.RecordingRoom]
+    if not route then
+        log("❌ Нет сохранённого маршрута для " .. Routes.RecordingRoom, Theme.Danger)
+        return
+    end
+
+    local stop = route.Stops[index]
+    if not stop then
+        log("❌ Точка #" .. index .. " не найдена", Theme.Danger)
+        return
+    end
+
+    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return end
+
+    myHRP.CFrame = CFrame.new(stop.Pos + Vector3.new(0, 3, 0))
+    log("📍 Телепорт к точке #" .. index, Theme.Success)
 end
 
 -- ═══════════════════════════════════════════════════════
@@ -271,8 +498,8 @@ pcall(function() MainGui.Parent = CoreGui end)
 if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 460, 0, 380)
-MainFrame.Position = UDim2.new(0.5, -230, 0.5, -190)
+MainFrame.Size = UDim2.new(0, 460, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -230, 0.5, -200)
 MainFrame.BackgroundColor3 = Theme.Bg
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -281,6 +508,7 @@ addCorner(MainFrame, 12)
 addStroke(MainFrame, Theme.Border, 1.5)
 makeDraggable(MainFrame)
 
+-- Заголовок
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 42)
 TitleBar.BackgroundColor3 = Theme.BgLight
@@ -339,6 +567,7 @@ CloseBtn.BorderSizePixel = 0
 CloseBtn.Parent = TitleBar
 addCorner(CloseBtn, 6)
 
+-- Вкладки
 local TabBar = Instance.new("Frame")
 TabBar.Size = UDim2.new(1, -24, 0, 36)
 TabBar.Position = UDim2.new(0, 12, 0, 50)
@@ -355,6 +584,7 @@ ContentFrame.BorderSizePixel = 0
 ContentFrame.Parent = MainFrame
 addCorner(ContentFrame, 10)
 
+-- Вкладка Консоль
 ConsoleTab = Instance.new("ScrollingFrame")
 ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
 ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
@@ -374,6 +604,23 @@ ConsoleLayout.Parent = ConsoleTab
 
 log("Консоль инициализирована", Theme.TextDim)
 
+-- Вкладка Маршруты
+local RoutesTab = Instance.new("ScrollingFrame")
+RoutesTab.Size = UDim2.new(1, -12, 1, -12)
+RoutesTab.Position = UDim2.new(0, 6, 0, 6)
+RoutesTab.BackgroundTransparency = 1
+RoutesTab.BorderSizePixel = 0
+RoutesTab.ScrollBarThickness = 5
+RoutesTab.ScrollBarImageColor3 = Theme.Accent
+RoutesTab.CanvasSize = UDim2.new(0, 0, 0, 700)
+RoutesTab.Visible = false
+RoutesTab.Parent = ContentFrame
+
+local RoutesLayout = Instance.new("UIListLayout")
+RoutesLayout.Padding = UDim.new(0, 8)
+RoutesLayout.Parent = RoutesTab
+
+-- Вкладка Тест
 local TestTab = Instance.new("ScrollingFrame")
 TestTab.Size = UDim2.new(1, -12, 1, -12)
 TestTab.Position = UDim2.new(0, 6, 0, 6)
@@ -381,7 +628,7 @@ TestTab.BackgroundTransparency = 1
 TestTab.BorderSizePixel = 0
 TestTab.ScrollBarThickness = 5
 TestTab.ScrollBarImageColor3 = Theme.Accent
-TestTab.CanvasSize = UDim2.new(0, 0, 0, 700)
+TestTab.CanvasSize = UDim2.new(0, 0, 0, 900)
 TestTab.Visible = false
 TestTab.Parent = ContentFrame
 
@@ -389,6 +636,7 @@ local TestLayout = Instance.new("UIListLayout")
 TestLayout.Padding = UDim.new(0, 8)
 TestLayout.Parent = TestTab
 
+-- Вкладка Настройки
 local SettingsTab = Instance.new("ScrollingFrame")
 SettingsTab.Size = UDim2.new(1, -12, 1, -12)
 SettingsTab.Position = UDim2.new(0, 6, 0, 6)
@@ -408,7 +656,7 @@ SettingsLayout.Parent = SettingsTab
 -- ═══════════════════════════════════════════════════════
 -- 🧱 UI-КОМПОНЕНТЫ
 -- ═══════════════════════════════════════════════════════
-local function makeSection(text)
+local function makeSection(parent, text)
     local s = Instance.new("TextLabel")
     s.Text = "  " .. text
     s.Size = UDim2.new(1, 0, 0, 26)
@@ -418,7 +666,7 @@ local function makeSection(text)
     s.TextSize = 12
     s.TextXAlignment = Enum.TextXAlignment.Left
     s.BorderSizePixel = 0
-    s.Parent = SettingsTab
+    s.Parent = parent
     addCorner(s, 6)
     return s
 end
@@ -426,11 +674,11 @@ end
 local function makeButton(parent, text, callback, color)
     local btn = Instance.new("TextButton")
     btn.Text = text
-    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.Size = UDim2.new(1, 0, 0, 38)
     btn.BackgroundColor3 = color or Theme.BgLighter
     btn.TextColor3 = Theme.Text
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 13
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
     btn.Parent = parent
@@ -533,6 +781,294 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "МАРШРУТЫ"
+-- ═══════════════════════════════════════════════════════
+makeSection(RoutesTab, "УПРАВЛЕНИЕ ЗАПИСЬЮ")
+
+-- СТАРТ / СТОП (в ряд)
+local recRow = Instance.new("Frame")
+recRow.Size = UDim2.new(1, 0, 0, 40)
+recRow.BackgroundTransparency = 1
+recRow.Parent = RoutesTab
+
+local startBtn = Instance.new("TextButton")
+startBtn.Text = "🔴 СТАРТ"
+startBtn.Size = UDim2.new(0.5, -4, 1, 0)
+startBtn.Position = UDim2.new(0, 0, 0, 0)
+startBtn.BackgroundColor3 = Theme.Record
+startBtn.TextColor3 = Theme.Text
+startBtn.Font = Enum.Font.GothamBold
+startBtn.TextSize = 14
+startBtn.BorderSizePixel = 0
+startBtn.AutoButtonColor = false
+startBtn.Parent = recRow
+addCorner(startBtn, 8)
+startBtn.MouseButton1Click:Connect(function()
+    startRecording()
+    startBtn.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+    stopBtn.BackgroundColor3 = Theme.Danger
+end)
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Text = "⏹ СТОП"
+stopBtn.Size = UDim2.new(0.5, -4, 1, 0)
+stopBtn.Position = UDim2.new(0.5, 4, 0, 0)
+stopBtn.BackgroundColor3 = Theme.BgLighter
+stopBtn.TextColor3 = Theme.Text
+stopBtn.Font = Enum.Font.GothamBold
+stopBtn.TextSize = 14
+stopBtn.BorderSizePixel = 0
+stopBtn.AutoButtonColor = false
+stopBtn.Parent = recRow
+addCorner(stopBtn, 8)
+stopBtn.MouseButton1Click:Connect(function()
+    stopRecording()
+    startBtn.BackgroundColor3 = Theme.Record
+    stopBtn.BackgroundColor3 = Theme.BgLighter
+end)
+
+-- Название комнаты
+local roomLabel = Instance.new("TextButton")
+roomLabel.Text = "КОМНАТА " .. Routes.RecordingRoom
+roomLabel.Size = UDim2.new(1, 0, 0, 50)
+roomLabel.BackgroundColor3 = Theme.Bg
+roomLabel.TextColor3 = Theme.Warning
+roomLabel.Font = Enum.Font.GothamBold
+roomLabel.TextSize = 20
+roomLabel.BorderSizePixel = 0
+roomLabel.AutoButtonColor = false
+roomLabel.Parent = RoutesTab
+addCorner(roomLabel, 8)
+addStroke(roomLabel, Theme.Warning, 2)
+
+-- Точка остановки
+makeSection(RoutesTab, "ТОЧКИ ОСТАНОВКИ")
+
+makeButton(RoutesTab, "📍 Добавить точку (текущая позиция)", function()
+    addStopPoint()
+end, Theme.Success)
+
+-- Фиксация маршрута
+makeSection(RoutesTab, "СОХРАНЕНИЕ")
+
+makeButton(RoutesTab, "💾 ЗАФИКСИРОВАТЬ МАРШРУТ", function()
+    saveRoute()
+end, Theme.Accent)
+
+-- Следующая комната
+makeButton(RoutesTab, "➡ СЛЕДУЮЩАЯ КОМНАТА", function()
+    local newRoom = nextRoom()
+    roomLabel.Text = "КОМНАТА " .. newRoom
+    log("📁 Переключено на комнату " .. newRoom, Theme.Warning)
+end, Theme.Warning)
+
+-- Переключение на конкретную комнату (для загрузки)
+makeSection(RoutesTab, "ЗАГРУЗКА СОХРАНЁННЫХ")
+
+makeInput(RoutesTab, "Номер комнаты (4 цифры)", Routes.RecordingRoom, function(v)
+    Routes.RecordingRoom = string.format("%04d", v)
+    roomLabel.Text = "КОМНАТА " .. Routes.RecordingRoom
+end)
+
+makeButton(RoutesTab, "📂 Загрузить маршрут комнаты", function()
+    loadRoute(Routes.RecordingRoom)
+end, Theme.BgLighter)
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "ТЕСТ"
+-- ═══════════════════════════════════════════════════════
+local function makeTestBtn(text, callback, color)
+    return makeButton(TestTab, text, callback, color)
+end
+
+makeSection(TestTab, "МАРШРУТЫ")
+
+makeTestBtn("📍 На место #1", function()
+    teleportToStop(1)
+end, Theme.Success)
+
+makeTestBtn("➡ В следующую комнату", function()
+    local newRoom = nextRoom()
+    if getgenv().refreshRoomLabel then
+        getgenv().refreshRoomLabel()
+    end
+    log("➡ Комната: " .. newRoom, Theme.Warning)
+end, Theme.Warning)
+
+makeTestBtn("🧹 Очистить визуализацию", function()
+    clearVisuals()
+    log("🧹 Визуализация очищена", Theme.Warning)
+end, Theme.Danger)
+
+-- Старые функции ESP
+makeSection(TestTab, "ESP")
+
+makeTestBtn("🧪 Найти игроков в радиусе", function()
+    local found = 0
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local d = (Camera.CFrame.Position - hrp.Position).Magnitude
+                if d <= Settings.TriggerRadius then
+                    found = found + 1
+                    log("Найден: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
+                end
+            end
+        end
+    end
+    log("Всего в радиусе: " .. found, found > 0 and Theme.Success or Theme.TextDim)
+end)
+
+makeTestBtn("▶  Активировать", function()
+    if Settings.Buttons.Activate then
+        fireButtonAction(Settings.Buttons.Activate)
+    else
+        log("❌ Координаты не заданы", Theme.Danger)
+    end
+end)
+
+makeTestBtn("🎫 Выдать билет", function()
+    if Settings.Buttons.GiveTicket then
+        fireButtonAction(Settings.Buttons.GiveTicket)
+    else
+        log("❌ Координаты не заданы", Theme.Danger)
+    end
+end)
+
+makeTestBtn("🔫 Проверить оружие", function()
+    if Settings.Buttons.CheckWeapon then
+        fireButtonAction(Settings.Buttons.CheckWeapon)
+    else
+        log("❌ Координаты не заданы", Theme.Danger)
+    end
+end)
+
+makeTestBtn("⏹  Деактивировать", function()
+    if Settings.Buttons.Deactivate then
+        fireButtonAction(Settings.Buttons.Deactivate)
+    else
+        log("❌ Координаты не заданы", Theme.Danger)
+    end
+end)
+
+makeTestBtn("🔢 Увеличение номера", function()
+    if Settings.Buttons.IncreaseNumber then
+        fireButtonAction(Settings.Buttons.IncreaseNumber)
+    else
+        log("❌ Координаты не заданы", Theme.Danger)
+    end
+end)
+
+makeTestBtn("🔄 Сбросить состояние", function()
+    ActionState = "idle"
+    StateTimer = 0
+    ProcessedPlayers = {}
+    IgnoredPlayers = {}
+    Queue = {}
+    log("Состояние сброшено", Theme.Warning)
+end, Theme.Danger)
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "НАСТРОЙКИ"
+-- ═══════════════════════════════════════════════════════
+makeSection(SettingsTab, "АВТОДЕЙСТВИЯ")
+makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
+    Settings.AutoActions = v
+    log("Автодействия: " .. (v and "ВКЛ" or "ВЫКЛ"), v and Theme.Success or Theme.TextDim)
+end)
+makeToggle(SettingsTab, "Нажимать «Активировать»", Settings.DoActivate, function(v) Settings.DoActivate = v end)
+makeToggle(SettingsTab, "Нажимать «Выдать билет»", Settings.DoGiveTicket, function(v) Settings.DoGiveTicket = v end)
+makeToggle(SettingsTab, "Нажимать «Проверить оружие»", Settings.DoCheckWeapon, function(v) Settings.DoCheckWeapon = v end)
+makeToggle(SettingsTab, "Нажимать «Деактивировать»", Settings.DoDeactivate, function(v) Settings.DoDeactivate = v end)
+
+makeSection(SettingsTab, "ПАРАМЕТРЫ")
+makeInput(SettingsTab, "Радиус обнаружения (м)", Settings.TriggerRadius, function(v) Settings.TriggerRadius = v end)
+makeInput(SettingsTab, "Порог приближения (м)", Settings.ApproachThreshold, function(v) Settings.ApproachThreshold = v end)
+makeInput(SettingsTab, "Ожидание после Активировать (с)", Settings.WaitAfterActivate, function(v) Settings.WaitAfterActivate = v end)
+makeInput(SettingsTab, "Ожидание перед Проверить (с)", Settings.WaitBeforeCheck, function(v) Settings.WaitBeforeCheck = v end)
+makeInput(SettingsTab, "Ожидание перед Деактивировать (с)", Settings.WaitBeforeDeactivate, function(v) Settings.WaitBeforeDeactivate = v end)
+makeInput(SettingsTab, "Ожидание если ушёл (с)", Settings.WaitLeftWithoutApproach, function(v) Settings.WaitLeftWithoutApproach = v end)
+makeInput(SettingsTab, "Задержка между игроками (с)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
+makeInput(SettingsTab, "Игнор после деактивации (с)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
+
+makeSection(SettingsTab, "ЗАПИСЬ МАРШРУТА")
+makeInput(SettingsTab, "Интервал записи (сек)", Routes.SampleInterval, function(v) Routes.SampleInterval = v end)
+makeInput(SettingsTab, "Мин. расстояние между точками (studs)", Routes.MinDistance, function(v) Routes.MinDistance = v end)
+
+makeSection(SettingsTab, "ESP")
+makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Settings.Enabled = v end)
+makeToggle(SettingsTab, "Показывать имя", Settings.ShowName, function(v) Settings.ShowName = v end)
+makeToggle(SettingsTab, "Показывать здоровье", Settings.ShowHealth, function(v) Settings.ShowHealth = v end)
+makeToggle(SettingsTab, "Показывать дистанцию", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
+makeToggle(SettingsTab, "Показывать статус", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
+makeToggle(SettingsTab, "Проверка команды", Settings.TeamCheck, function(v) Settings.TeamCheck = v end)
+
+makeSection(SettingsTab, "ОТЛАДКА")
+makeToggle(SettingsTab, "Показывать индикатор клика", Settings.ShowClickIndicator, function(v)
+    Settings.ShowClickIndicator = v
+end)
+makeInput(SettingsTab, "Сдвиг по Y (если не попадает)", Settings.CrosshairOffsetY, function(v)
+    Settings.CrosshairOffsetY = v
+    log("Сдвиг по Y: " .. v, Theme.Warning)
+end)
+
+makeSection(SettingsTab, "КООРДИНАТЫ КНОПОК")
+
+local buttonLabelRefs = {}
+
+local function makeButtonSetter(name, key)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Theme.Bg
+    row.BorderSizePixel = 0
+    row.Parent = SettingsTab
+    addCorner(row, 8)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Text = name
+    lbl.Size = UDim2.new(0.5, -12, 1, 0)
+    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Theme.Text
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.5, -12, 0, 24)
+    btn.Position = UDim2.new(0.5, 0, 0.5, -12)
+    btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
+    btn.Text = Settings.Buttons[key] and "✓ Задано" or "Выбрать"
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = row
+    addCorner(btn, 6)
+
+    btn.MouseButton1Click:Connect(function()
+        openCrosshairPicker(key, name)
+    end)
+    buttonLabelRefs[key] = {btn = btn, name = name}
+end
+
+getgenv().refreshButtonLabels = function()
+    for key, ref in pairs(buttonLabelRefs) do
+        local data = Settings.Buttons[key]
+        if data and data.Pos then
+            ref.btn.Text = string.format("✓ X=%d, Y=%d", data.Pos.X, data.Pos.Y)
+            ref.btn.BackgroundColor3 = Theme.Success
+        else
+            ref.btn.Text = "Выбрать"
+            ref.btn.BackgroundColor3 = Theme.Warning
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════
 -- 🎯 ПРИЦЕЛ
 -- ═══════════════════════════════════════════════════════
 local CrosshairGui = Instance.new("ScreenGui")
@@ -627,7 +1163,7 @@ addStroke(CrossPanel, Theme.Accent, 2)
 makeDraggable(CrossPanel)
 
 local CrossTitleLbl = Instance.new("TextLabel")
-CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — Активировать"
+CrossTitleLbl.Text = "🎯 ПРИЦЕЛ"
 CrossTitleLbl.Size = UDim2.new(1, -20, 0, 26)
 CrossTitleLbl.Position = UDim2.new(0, 10, 0, 6)
 CrossTitleLbl.BackgroundTransparency = 1
@@ -660,48 +1196,11 @@ SelectBtn.AutoButtonColor = false
 SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
 
-SelectBtn.MouseEnter:Connect(function()
-    TweenService:Create(SelectBtn, TweenInfo.new(0.15), {
-        BackgroundColor3 = Theme.AccentHover
-    }):Play()
-end)
-SelectBtn.MouseLeave:Connect(function()
-    TweenService:Create(SelectBtn, TweenInfo.new(0.15), {
-        BackgroundColor3 = Theme.Accent
-    }):Play()
-end)
-
-local function getCrossCenter()
-    local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
-    return math.floor(pos.X), math.floor(pos.Y)
-end
-
-local currentPickKey = nil
-local currentPickName = nil
-
-RunService.RenderStepped:Connect(function()
-    if not CrosshairGui.Enabled then return end
-    local x, y = getCrossCenter()
-    CoordLabel.Text = string.format("X: %d   Y: %d", x, y)
-end)
-
-local function openCrosshairPicker(key, displayName)
-    currentPickKey = key
-    currentPickName = displayName
-    CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — " .. displayName
-    CrosshairGui.Enabled = true
-    MainGui.Enabled = false
-    CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
-    log("🎯 Перетащи крест на кнопку и жми «Выбрать»", Theme.Warning)
-end
-
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then return end
-    local x, y = getCrossCenter()
-    Settings.Buttons[currentPickKey] = {
-        Path = nil,
-        Pos = {X = x, Y = y},
-    }
+    local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
+    local x, y = math.floor(pos.X), math.floor(pos.Y)
+    Settings.Buttons[currentPickKey] = {Pos = {X = x, Y = y}}
     log(string.format("✓ %s: X=%d, Y=%d", currentPickName, x, y), Theme.Success)
     if getgenv().refreshButtonLabels then getgenv().refreshButtonLabels() end
     CrosshairGui.Enabled = false
@@ -710,182 +1209,44 @@ SelectBtn.MouseButton1Click:Connect(function()
     currentPickName = nil
 end)
 
--- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "ТЕСТ"
--- ═══════════════════════════════════════════════════════
-local function makeTestBtn(text, callback, color)
-    return makeButton(TestTab, text, callback, color)
+local currentPickKey = nil
+local currentPickName = nil
+
+local function openCrosshairPicker(key, displayName)
+    currentPickKey = key
+    currentPickName = displayName
+    CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — " .. displayName
+    CrosshairGui.Enabled = true
+    MainGui.Enabled = false
+    CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
+    log("🎯 Перетащи крест и жми «Выбрать»", Theme.Warning)
 end
 
-makeTestBtn("🧪 Найти игроков в радиусе", function()
-    local found = 0
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                if d <= Settings.TriggerRadius then
-                    found = found + 1
-                    log("Найден: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
-                end
-            end
-        end
-    end
-    log("Всего в радиусе: " .. found, found > 0 and Theme.Success or Theme.TextDim)
+RunService.RenderStepped:Connect(function()
+    if not CrosshairGui.Enabled then return end
+    local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
+    CoordLabel.Text = string.format("X: %d   Y: %d", pos.X, pos.Y)
 end)
-
-makeTestBtn("▶  Активировать", function()
-    if Settings.Buttons.Activate then
-        fireButtonAction(Settings.Buttons.Activate)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🎫 Выдать билет", function()
-    if Settings.Buttons.GiveTicket then
-        fireButtonAction(Settings.Buttons.GiveTicket)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔫 Проверить оружие", function()
-    if Settings.Buttons.CheckWeapon then
-        fireButtonAction(Settings.Buttons.CheckWeapon)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("⏹  Деактивировать", function()
-    if Settings.Buttons.Deactivate then
-        fireButtonAction(Settings.Buttons.Deactivate)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔄 Сбросить состояние", function()
-    ActionState = "idle"
-    StateTimer = 0
-    ProcessedPlayers = {}
-    IgnoredPlayers = {}
-    Queue = {}
-    for _, esp in pairs(ESPCache) do
-        if esp.StatusLabel then esp.StatusLabel.Visible = false end
-    end
-    log("Состояние сброшено", Theme.Warning)
-end, Theme.Danger)
-
-makeTestBtn("🗑 Очистить игнор-лист", function()
-    IgnoredPlayers = {}
-    log("Игнор-лист очищен", Theme.Warning)
-end, Theme.Warning)
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "НАСТРОЙКИ"
+-- 🎯 ЗАПИСЬ МАРШРУТА — ОСНОВНОЙ ЦИКЛ
 -- ═══════════════════════════════════════════════════════
-makeSection("АВТОДЕЙСТВИЯ")
-makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
-    Settings.AutoActions = v
-    log("Автодействия: " .. (v and "ВКЛ" or "ВЫКЛ"), v and Theme.Success or Theme.TextDim)
+RunService.Heartbeat:Connect(function()
+    if not Routes.Recording then return end
+    
+    local now = tick()
+    if now - Routes.LastSampleTime < Routes.SampleInterval then return end
+    Routes.LastSampleTime = now
+
+    local myChar = LocalPlayer.Character
+    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return end
+
+    recordPathPoint(myHRP.Position)
 end)
-makeToggle(SettingsTab, "Нажимать «Активировать»", Settings.DoActivate, function(v) Settings.DoActivate = v end)
-makeToggle(SettingsTab, "Нажимать «Выдать билет»", Settings.DoGiveTicket, function(v) Settings.DoGiveTicket = v end)
-makeToggle(SettingsTab, "Нажимать «Проверить оружие»", Settings.DoCheckWeapon, function(v) Settings.DoCheckWeapon = v end)
-makeToggle(SettingsTab, "Нажимать «Деактивировать»", Settings.DoDeactivate, function(v) Settings.DoDeactivate = v end)
-
-makeSection("ПАРАМЕТРЫ")
-makeInput(SettingsTab, "Радиус обнаружения (м)", Settings.TriggerRadius, function(v) Settings.TriggerRadius = v end)
-makeInput(SettingsTab, "Порог приближения (м)", Settings.ApproachThreshold, function(v) Settings.ApproachThreshold = v end)
-makeInput(SettingsTab, "Ожидание после Активировать (с)", Settings.WaitAfterActivate, function(v) Settings.WaitAfterActivate = v end)
-makeInput(SettingsTab, "Ожидание перед Проверить (с)", Settings.WaitBeforeCheck, function(v) Settings.WaitBeforeCheck = v end)
-makeInput(SettingsTab, "Ожидание перед Деактивировать (с)", Settings.WaitBeforeDeactivate, function(v) Settings.WaitBeforeDeactivate = v end)
-makeInput(SettingsTab, "Ожидание если ушёл (с)", Settings.WaitLeftWithoutApproach, function(v) Settings.WaitLeftWithoutApproach = v end)
-makeInput(SettingsTab, "Задержка между игроками (с)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
-makeInput(SettingsTab, "Игнор после деактивации (с)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
-
-makeSection("ESP")
-makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Settings.Enabled = v end)
-makeToggle(SettingsTab, "Показывать имя", Settings.ShowName, function(v) Settings.ShowName = v end)
-makeToggle(SettingsTab, "Показывать здоровье", Settings.ShowHealth, function(v) Settings.ShowHealth = v end)
-makeToggle(SettingsTab, "Показывать дистанцию", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
-makeToggle(SettingsTab, "Показывать статус", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
-makeToggle(SettingsTab, "Проверка команды", Settings.TeamCheck, function(v) Settings.TeamCheck = v end)
-
-makeSection("ОТЛАДКА")
-makeToggle(SettingsTab, "Показывать индикатор клика", Settings.ShowClickIndicator, function(v)
-    Settings.ShowClickIndicator = v
-end)
-makeInput(SettingsTab, "Сдвиг по Y (если не попадает)", Settings.CrosshairOffsetY, function(v)
-    Settings.CrosshairOffsetY = v
-    log("Сдвиг по Y: " .. v, Theme.Warning)
-end)
-
-makeSection("КООРДИНАТЫ КНОПОК")
-
-local buttonLabelRefs = {}
-
-local function makeButtonSetter(name, key)
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
-    row.BorderSizePixel = 0
-    row.Parent = SettingsTab
-    addCorner(row, 8)
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Text = name
-    lbl.Size = UDim2.new(0.5, -12, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Theme.Text
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = row
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.5, -12, 0, 24)
-    btn.Position = UDim2.new(0.5, 0, 0.5, -12)
-    btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
-    btn.Text = Settings.Buttons[key] and "✓ Задано" or "Выбрать"
-    btn.TextColor3 = Theme.Text
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = row
-    addCorner(btn, 6)
-
-    btn.MouseButton1Click:Connect(function()
-        openCrosshairPicker(key, name)
-    end)
-
-    buttonLabelRefs[key] = {btn = btn, name = name}
-end
-
-makeButtonSetter("Активировать", "Activate")
-makeButtonSetter("Выдать билет", "GiveTicket")
-makeButtonSetter("Проверить оружие", "CheckWeapon")
-makeButtonSetter("Деактивировать", "Deactivate")
-
-getgenv().refreshButtonLabels = function()
-    for key, ref in pairs(buttonLabelRefs) do
-        local data = Settings.Buttons[key]
-        if data and data.Pos then
-            ref.btn.Text = string.format("✓ X=%d, Y=%d", data.Pos.X, data.Pos.Y)
-            ref.btn.BackgroundColor3 = Theme.Success
-        else
-            ref.btn.Text = "Выбрать"
-            ref.btn.BackgroundColor3 = Theme.Warning
-        end
-    end
-end
 
 -- ═══════════════════════════════════════════════════════
--- 🎨 ESP + СТАТУС
+-- 🎨 ESP
 -- ═══════════════════════════════════════════════════════
 local function createESP(player)
     if player == LocalPlayer then return end
@@ -899,18 +1260,14 @@ local function createESP(player)
     billboard.Enabled = false
     billboard.Parent = MainGui
 
-    -- СТАТУС (самый верх)
     local statusLabel = Instance.new("TextLabel")
-    statusLabel.Name = "StatusLabel"
     statusLabel.Size = UDim2.new(1, 0, 0, 22)
-    statusLabel.Position = UDim2.new(0, 0, 0, 0)
     statusLabel.BackgroundTransparency = 1
     statusLabel.Font = Enum.Font.GothamBold
     statusLabel.TextSize = 16
     statusLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
     statusLabel.TextStrokeTransparency = 0
     statusLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    statusLabel.Text = ""
     statusLabel.Visible = false
     statusLabel.Parent = billboard
 
@@ -957,7 +1314,7 @@ local function createESP(player)
     esp.DistLabel = distLabel
     esp.HealthBg = healthBg
     esp.HealthFill = healthFill
-    esp.StatusText = ""           -- текущий текст статуса
+    esp.StatusText = ""
 
     ESPCache[player] = esp
 end
@@ -969,23 +1326,20 @@ local function removeESP(player)
     ESPCache[player] = nil
 end
 
--- Установить статус игроку
 local function setPlayerStatus(player, text, color)
     local esp = ESPCache[player]
     if not esp or not esp.StatusLabel then return end
     esp.StatusText = text or ""
     esp.StatusLabel.Text = text or ""
     esp.StatusLabel.TextColor3 = color or Color3.fromRGB(255, 220, 80)
-    esp.StatusLabel.Visible = (text ~= nil and text ~= "")
 end
 
--- Очистить статус
 local function clearPlayerStatus(player)
     setPlayerStatus(player, "", nil)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🔄 ОСНОВНОЙ ЦИКЛ
+-- 🔄 ОСНОВНОЙ ЦИКЛ ESP + АВТОДЕЙСТВИЯ
 -- ═══════════════════════════════════════════════════════
 RunService.RenderStepped:Connect(function(dt)
     -- ESP
@@ -1028,152 +1382,113 @@ RunService.RenderStepped:Connect(function(dt)
     if not Settings.AutoActions then return end
     StateTimer = StateTimer + dt
 
-    -- Чистим истёкшие игноры
     local now = tick()
     for p, expireAt in pairs(IgnoredPlayers) do
-        if now >= expireAt then
-            IgnoredPlayers[p] = nil
-        end
+        if now >= expireAt then IgnoredPlayers[p] = nil end
     end
 
-    -- IDLE: наполняем очередь игроками в радиусе, которые не обработаны и не в игноре
     if ActionState == "idle" then
         for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character
-               and not ProcessedPlayers[p]
-               and not IgnoredPlayers[p] then
+            if p ~= LocalPlayer and p.Character and not ProcessedPlayers[p] and not IgnoredPlayers[p] then
                 local hrp = p.Character:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local d = (Camera.CFrame.Position - hrp.Position).Magnitude
                     if d <= Settings.TriggerRadius then
-                        -- Проверяем, что его нет уже в очереди
                         local inQueue = false
                         for _, qp in ipairs(Queue) do
                             if qp == p then inQueue = true; break end
                         end
                         if not inQueue then
                             table.insert(Queue, p)
-                            log("📋 В очередь: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
+                            log("📋 В очередь: " .. p.Name, Theme.Warning)
                         end
                     end
                 end
             end
         end
-
-        -- Если очередь не пуста и есть задержка — берём первого
-        if #Queue > 0 then
-            -- Задержка 5 сек между игроками (в начале очереди — без задержки)
-            if StateTimer >= Settings.QueueDelay then
-                local p = table.remove(Queue, 1)
-                if p and p.Character and p.Parent then
-                    local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                        CurrentTarget = p
-                        InitialDistance = d
-                        ActionState = "activating"
-                        StateTimer = 0
-                        ProcessedPlayers[p] = true
-                        log("👤 Обработка: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
-
-                        setPlayerStatus(p, "АКТИВАЦИЯ...", Color3.fromRGB(255, 220, 80))
-
-                        if Settings.DoActivate and Settings.Buttons.Activate then
-                            fireButtonAction(Settings.Buttons.Activate)
-                            log("▶ Активировать", Theme.Accent)
-                        end
+        if #Queue > 0 and StateTimer >= Settings.QueueDelay then
+            local p = table.remove(Queue, 1)
+            if p and p.Character and p.Parent then
+                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    CurrentTarget = p
+                    InitialDistance = (Camera.CFrame.Position - hrp.Position).Magnitude
+                    ActionState = "activating"
+                    StateTimer = 0
+                    ProcessedPlayers[p] = true
+                    log("👤 Обработка: " .. p.Name, Theme.Warning)
+                    setPlayerStatus(p, "АКТИВАЦИЯ...", Color3.fromRGB(255, 220, 80))
+                    if Settings.DoActivate and Settings.Buttons.Activate then
+                        fireButtonAction(Settings.Buttons.Activate)
                     end
                 end
             end
-        else
-            -- Очередь пуста — сбрасываем таймер, чтобы при следующем игроке задержка не сработала
+        elseif #Queue == 0 then
             StateTimer = 0
         end
     end
 
-    -- АКТИВАЦИЯ: ждём 10 сек
     if ActionState == "activating" and CurrentTarget then
         setPlayerStatus(CurrentTarget, "АКТИВАЦИЯ " .. math.floor(Settings.WaitAfterActivate - StateTimer) .. "с", Color3.fromRGB(255, 220, 80))
         if StateTimer >= Settings.WaitAfterActivate then
-            local char = CurrentTarget.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
                 local d = (Camera.CFrame.Position - hrp.Position).Magnitude
                 if d < InitialDistance - Settings.ApproachThreshold then
-                    log("👣 " .. CurrentTarget.Name .. " подошёл", Theme.Success)
                     setPlayerStatus(CurrentTarget, "ВЫДАЧА БИЛЕТА", Color3.fromRGB(80, 200, 255))
                     if Settings.DoGiveTicket and Settings.Buttons.GiveTicket then
                         fireButtonAction(Settings.Buttons.GiveTicket)
-                        log("🎫 Выдать билет", Theme.Accent)
                     end
                     ActionState = "ticket"
                     StateTimer = 0
                 else
-                    log("💨 " .. CurrentTarget.Name .. " не подошёл", Theme.TextDim)
                     setPlayerStatus(CurrentTarget, "НЕ ПОДОШЁЛ", Color3.fromRGB(200, 100, 100))
                     ActionState = "waitLeft"
                     StateTimer = 0
                 end
             else
-                setPlayerStatus(CurrentTarget, "УШЁЛ", Color3.fromRGB(200, 100, 100))
                 ActionState = "waitLeft"
                 StateTimer = 0
             end
         end
     end
 
-    -- БИЛЕТ: 3 сек → проверка оружия
     if ActionState == "ticket" and StateTimer >= Settings.WaitBeforeCheck then
-        if CurrentTarget then
-            setPlayerStatus(CurrentTarget, "ПРОВЕРКА ОРУЖИЯ", Color3.fromRGB(255, 180, 80))
-        end
+        if CurrentTarget then setPlayerStatus(CurrentTarget, "ПРОВЕРКА ОРУЖИЯ", Color3.fromRGB(255, 180, 80)) end
         if Settings.DoCheckWeapon and Settings.Buttons.CheckWeapon then
             fireButtonAction(Settings.Buttons.CheckWeapon)
-            log("🔫 Проверить оружие", Theme.Accent)
         end
         ActionState = "weapon"
         StateTimer = 0
     end
 
-    -- ОРУЖИЕ: 3 сек → деактивация
     if ActionState == "weapon" and StateTimer >= Settings.WaitBeforeDeactivate then
-        if CurrentTarget then
-            setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ", Color3.fromRGB(200, 130, 255))
-        end
+        if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ", Color3.fromRGB(200, 130, 255)) end
         if Settings.DoDeactivate and Settings.Buttons.Deactivate then
             fireButtonAction(Settings.Buttons.Deactivate)
-            log("⏹ Деактивировать", Theme.Accent)
         end
         ActionState = "cooldown"
         StateTimer = 0
     end
 
-    -- WAIT LEFT: 5 сек → деактивация
     if ActionState == "waitLeft" and StateTimer >= Settings.WaitLeftWithoutApproach then
-        if CurrentTarget then
-            setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ (ушёл)", Color3.fromRGB(200, 130, 255))
-        end
+        if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ (ушёл)", Color3.fromRGB(200, 130, 255)) end
         if Settings.DoDeactivate and Settings.Buttons.Deactivate then
             fireButtonAction(Settings.Buttons.Deactivate)
-            log("⏹ Деактивировать (ушёл)", Theme.Accent)
         end
         ActionState = "cooldown"
         StateTimer = 0
     end
 
-    -- COOLDOWN: 5 сек чтобы игрок вышел из зоны, потом снимаем статус, добавляем в игнор и возвращаемся в idle
     if ActionState == "cooldown" and StateTimer >= 5 then
         if CurrentTarget then
-            local p = CurrentTarget
-            clearPlayerStatus(p)
-            -- Добавляем в игнор на 40 сек
-            IgnoredPlayers[p] = tick() + Settings.IgnoreDuration
-            log("🚫 " .. p.Name .. " в игноре на " .. Settings.IgnoreDuration .. "с", Theme.TextDim)
+            clearPlayerStatus(CurrentTarget)
+            IgnoredPlayers[CurrentTarget] = tick() + Settings.IgnoreDuration
+            log("🚫 " .. CurrentTarget.Name .. " в игноре на " .. Settings.IgnoreDuration .. "с", Theme.TextDim)
         end
         CurrentTarget = nil
         ActionState = "idle"
         StateTimer = 0
-        -- Очередь не трогаем — продолжаем с другими игроками
     end
 end)
 
@@ -1186,9 +1501,7 @@ Players.PlayerRemoving:Connect(function(player)
     ProcessedPlayers[player] = nil
     IgnoredPlayers[player] = nil
     for i = #Queue, 1, -1 do
-        if Queue[i] == player then
-            table.remove(Queue, i)
-        end
+        if Queue[i] == player then table.remove(Queue, i) end
     end
 end)
 for _, p in pairs(Players:GetPlayers()) do createESP(p) end
@@ -1198,6 +1511,7 @@ for _, p in pairs(Players:GetPlayers()) do createESP(p) end
 -- ═══════════════════════════════════════════════════════
 local tabs = {
     {Name = "Консоль", Frame = ConsoleTab},
+    {Name = "Маршруты", Frame = RoutesTab},
     {Name = "Тест", Frame = TestTab},
     {Name = "Настройки", Frame = SettingsTab},
 }
@@ -1221,7 +1535,7 @@ for i, tab in ipairs(tabs) do
     btn.BackgroundColor3 = Theme.BgLighter
     btn.TextColor3 = Theme.Text
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 13
+    btn.TextSize = 12
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
     btn.Parent = TabBar
@@ -1251,14 +1565,20 @@ CloseBtn.MouseButton1Click:Connect(function()
     log("UI скрыт. Вернуть: getgenv().ShowUI()", Theme.Warning)
 end)
 
+getgenv().refreshRoomLabel = function()
+    roomLabel.Text = "КОМНАТА " .. Routes.RecordingRoom
+end
+
 -- ═══════════════════════════════════════════════════════
 -- 🌐 ПУБЛИЧНОЕ API
 -- ═══════════════════════════════════════════════════════
 getgenv().ESP = {
     Settings = Settings,
+    Routes = Routes,
     Toggle = function() Settings.Enabled = not Settings.Enabled end,
     Destroy = function()
         for p, _ in pairs(ESPCache) do removeESP(p) end
+        clearVisuals()
         pcall(function() MainGui:Destroy() end)
         pcall(function() CrosshairGui:Destroy() end)
         pcall(function() ClickIndicatorGui:Destroy() end)
@@ -1270,4 +1590,4 @@ getgenv().ShowUI = function() MainGui.Enabled = true end
 getgenv().HideUI = function() MainGui.Enabled = false end
 
 log("✅ Скрипт загружен!", Theme.Success)
-log("UI: getgenv().ShowUI()", Theme.TextDim)
+log("Вкладка «Маршруты» — запись пути", Theme.Warning)
