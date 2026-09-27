@@ -1,129 +1,63 @@
 --[[
-    N.lua — ESP + AUTO ACTIONS + ROUTES
-    Версия: 6.0 (авто-маршрут до дверей RoomExit)
-    Для Delta Executor (телефон)
+    obj_inf.lua — Инспектор объектов + GUI-консоль + инфо о кнопках
+    Версия: 3.0
+    Для Delta Executor
 --]]
 
-if getgenv().ESP_LOADED then
+if getgenv().OBJ_INF_LOADED then
     pcall(function()
-        if getgenv().ESP and getgenv().ESP.Destroy then
-            getgenv().ESP.Destroy()
+        if getgenv().ObjInf and getgenv().ObjInf.Destroy then
+            getgenv().ObjInf.Destroy()
         end
     end)
-    task.wait(0.3)
+    task.wait(0.2)
 end
-getgenv().ESP_LOADED = true
+getgenv().OBJ_INF_LOADED = true
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
-local GuiService = game:GetService("GuiService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -- ═══════════════════════════════════════════════════════
--- 🎨 ТЕМА
+-- 🎨 ЦВЕТА
 -- ═══════════════════════════════════════════════════════
-local Theme = {
-    Bg          = Color3.fromRGB(20, 20, 28),
-    BgLight     = Color3.fromRGB(30, 30, 40),
-    BgLighter   = Color3.fromRGB(42, 42, 55),
-    Accent      = Color3.fromRGB(90, 130, 220),
+local Colors = {
+    Bg        = Color3.fromRGB(20, 20, 28),
+    BgLight   = Color3.fromRGB(30, 30, 40),
+    BgLighter = Color3.fromRGB(42, 42, 55),
+    Accent    = Color3.fromRGB(90, 130, 220),
     AccentHover = Color3.fromRGB(120, 160, 255),
-    Success     = Color3.fromRGB(0, 180, 100),
-    Danger      = Color3.fromRGB(210, 70, 70),
-    Warning     = Color3.fromRGB(240, 170, 60),
-    Text        = Color3.fromRGB(240, 240, 245),
-    TextDim     = Color3.fromRGB(150, 150, 165),
-    Border      = Color3.fromRGB(60, 60, 80),
-    PathLine    = Color3.fromRGB(0, 220, 100),
-    StopMark    = Color3.fromRGB(255, 80, 80),
-    DoorMark    = Color3.fromRGB(255, 200, 80),
+    Success   = Color3.fromRGB(0, 200, 100),
+    Danger    = Color3.fromRGB(210, 70, 70),
+    Warning   = Color3.fromRGB(240, 170, 60),
+    Text      = Color3.fromRGB(240, 240, 245),
+    TextDim   = Color3.fromRGB(150, 150, 165),
+    Border    = Color3.fromRGB(60, 60, 80),
+    Highlight = Color3.fromRGB(0, 255, 150),
+    LogText   = Color3.fromRGB(180, 220, 180),
+    EColor    = Color3.fromRGB(255, 220, 80),
+    ButtonCol = Color3.fromRGB(120, 200, 255),
+    CodeCol   = Color3.fromRGB(180, 255, 200),
 }
-
--- ═══════════════════════════════════════════════════════
--- ⚙️ НАСТРОЙКИ
--- ═══════════════════════════════════════════════════════
-local Settings = {
-    Enabled = true,
-    ShowName = true,
-    ShowHealth = true,
-    ShowDistance = true,
-    ShowStatus = true,
-    TeamCheck = false,
-    MaxDistance = 1000,
-    NameColor = Color3.fromRGB(255, 255, 255),
-    HealthColor = Color3.fromRGB(0, 255, 0),
-    TextSize = 14,
-    HeadOffset = 3,
-
-    AutoActions = false,
-    TriggerRadius = 100,
-    ApproachThreshold = 10,
-    DoActivate = true,
-    DoGiveTicket = true,
-    DoCheckWeapon = true,
-    DoDeactivate = true,
-    WaitAfterActivate = 10,
-    WaitBeforeCheck = 3,
-    WaitBeforeDeactivate = 3,
-    WaitLeftWithoutApproach = 5,
-    QueueDelay = 5,
-    IgnoreDuration = 40,
-
-    Buttons = {
-        Activate = nil,
-        GiveTicket = nil,
-        CheckWeapon = nil,
-        Deactivate = nil,
-        IncreaseNumber = nil,
-    },
-
-    CrosshairColor = Color3.fromRGB(0, 255, 100),
-    ShowClickIndicator = true,
-    CrosshairOffsetY = 0,
-}
-
--- ═══════════════════════════════════════════════════════
--- 🚪 НАСТРОЙКИ МАРШРУТА
--- ═══════════════════════════════════════════════════════
-local RouteSettings = {
-    DoorName = "RoomExit",
-    CurrentRoom = 1,          -- к какой комнате ехать
-    StepSize = 10,            -- шаг телепорта (studs)
-    StepDelay = 0.05,         -- задержка между шагами (сек)
-    StopLeftOffset = 3,       -- сдвиг влево от двери
-    StopBackOffset = 2,       -- сдвиг назад от двери
-    StopHeightOffset = 3,     -- высота над полом
-    AutoNextRoom = false,     -- автоматически менять номер комнаты после достижения
-}
-
-local Doors = {}              -- {[roomNum] = {Instance, Position, CFrame, FullPath}}
-
-local ESPCache = {}
-local ActionState = "idle"
-local StateTimer = 0
-local InitialDistance = 0
-local ProcessedPlayers = {}
-local IgnoredPlayers = {}
-local Queue = {}
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
 -- ═══════════════════════════════════════════════════════
-local function addCorner(parent, radius)
+local function addCorner(parent, r)
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius or 8)
+    c.CornerRadius = UDim.new(0, r or 8)
     c.Parent = parent
     return c
 end
 
 local function addStroke(parent, color, thickness)
     local s = Instance.new("UIStroke")
-    s.Color = color or Theme.Border
+    s.Color = color or Colors.Border
     s.Thickness = thickness or 1
     s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     s.Parent = parent
@@ -160,399 +94,206 @@ local function makeDraggable(frame, handle)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ЛОГ
+-- 📦 ФОРМАТИРОВАНИЕ
 -- ═══════════════════════════════════════════════════════
-local ConsoleTab
-
-local function log(text, color)
-    if not ConsoleTab then
-        print("[ESP] " .. tostring(text))
-        return
-    end
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -8, 0, 20)
-    label.BackgroundTransparency = 1
-    label.Text = "›  " .. tostring(text)
-    label.TextColor3 = color or Theme.Text
-    label.Font = Enum.Font.Code
-    label.TextSize = 12
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = ConsoleTab
-    local children = ConsoleTab:GetChildren()
-    if #children > 105 then
-        for i = 1, 10 do
-            if children[i] and children[i]:IsA("TextLabel") then
-                children[i]:Destroy()
-            end
-        end
+local function formatValue(val)
+    local t = typeof(val)
+    if t == "Vector3" then
+        return string.format("Vector3(%.3f, %.3f, %.3f)", val.X, val.Y, val.Z)
+    elseif t == "Vector2" then
+        return string.format("Vector2(%.3f, %.3f)", val.X, val.Y)
+    elseif t == "CFrame" then
+        return string.format("CFrame Pos(%.3f, %.3f, %.3f)", val.Position.X, val.Position.Y, val.Position.Z)
+    elseif t == "Color3" then
+        return string.format("Color3(%d, %d, %d)",
+            math.floor(val.R * 255), math.floor(val.G * 255), math.floor(val.B * 255))
+    elseif t == "EnumItem" then
+        return "Enum." .. tostring(val)
+    elseif t == "Instance" then
+        return val.ClassName .. " [" .. val.Name .. "]"
+    elseif t == "table" then
+        local count = 0
+        for _ in pairs(val) do count = count + 1 end
+        return "table (" .. count .. " items)"
+    elseif t == "number" then
+        if val == math.floor(val) then return tostring(val) end
+        return string.format("%.4f", val)
+    else
+        return tostring(val)
     end
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 ИНДИКАТОР КЛИКА
+-- 🎯 АНАЛИЗ КНОПКИ (главная новая функция)
 -- ═══════════════════════════════════════════════════════
-local ClickIndicatorGui = Instance.new("ScreenGui")
-ClickIndicatorGui.Name = "ESP_ClickIndicator"
-ClickIndicatorGui.ResetOnSpawn = false
-ClickIndicatorGui.IgnoreGuiInset = true
-ClickIndicatorGui.DisplayOrder = 9999
-pcall(function() ClickIndicatorGui.Parent = CoreGui end)
-if not ClickIndicatorGui.Parent then ClickIndicatorGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+-- Возвращает таблицу с полной инфой о кнопке
+local function analyzeButton(obj)
+    if not obj or not obj:IsA("GuiButton") then return nil end
 
-local function showClickIndicator(x, y)
-    if not Settings.ShowClickIndicator then return end
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 40, 0, 40)
-    dot.Position = UDim2.new(0, x - 20, 0, y - 20)
-    dot.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    dot.BackgroundTransparency = 0.4
-    dot.BorderSizePixel = 3
-    dot.BorderColor3 = Color3.fromRGB(255, 255, 0)
-    dot.ZIndex = 10000
-    dot.Parent = ClickIndicatorGui
-    addCorner(dot, 20)
-    task.spawn(function()
-        task.wait(0.8)
-        TweenService:Create(dot, TweenInfo.new(0.4), {
-            BackgroundTransparency = 1,
-            Size = UDim2.new(0, 60, 0, 60),
-            Position = UDim2.new(0, x - 30, 0, y - 30),
-        }):Play()
-        task.wait(0.5)
-        dot:Destroy()
+    local info = {
+        IsButton = true,
+        ClassName = obj.ClassName,
+        Name = obj.Name,
+        FullPath = obj:GetFullName(),
+
+        -- Путь относительно PlayerGui
+        PlayerGuiPath = nil,
+        CoreGuiPath = nil,
+
+        -- Видимость
+        Visible = obj.Visible,
+        Active = obj.Active,
+        Interactable = obj.Interactable,
+        AutoButtonColor = obj.AutoButtonColor,
+
+        -- Размер и позиция
+        Size = obj.AbsoluteSize,
+        Position = obj.AbsolutePosition,
+        AbsoluteRotation = obj.AbsoluteRotation,
+
+        -- Z-index
+        ZIndex = obj.ZIndex,
+        ZIndexBehavior = obj.ZIndexBehavior,
+
+        -- Родители
+        Parent = obj.Parent and obj.Parent.Name or "nil",
+        ParentClass = obj.Parent and obj.Parent.ClassName or "nil",
+        ScreenGui = nil,
+        ScreenGuiName = nil,
+        ScreenGuiEnabled = nil,
+
+        -- Доступные сигналы для клика
+        Signals = {},
+
+        -- Есть ли обработчик (эвристика)
+        LikelyHandler = nil,
+    }
+
+    -- Строим путь относительно PlayerGui / CoreGui
+    local objPath = {}
+    local current = obj
+    while current and current ~= LocalPlayer.PlayerGui and current ~= CoreGui and current ~= game do
+        table.insert(objPath, 1, current.Name)
+        current = current.Parent
+    end
+
+    if current == LocalPlayer.PlayerGui then
+        info.PlayerGuiPath = table.concat(objPath, ".")
+    elseif current == CoreGui then
+        info.CoreGuiPath = table.concat(objPath, ".")
+    end
+
+    -- Находим ScreenGui родитель
+    local parent = obj.Parent
+    while parent and parent ~= game do
+        if parent:IsA("ScreenGui") then
+            info.ScreenGui = parent.Name
+            info.ScreenGuiName = parent.Name
+            info.ScreenGuiEnabled = parent.Enabled
+            break
+        end
+        parent = parent.Parent
+    end
+
+    -- Доступные сигналы для клика
+    info.Signals = {
+        "Activated",
+        "MouseButton1Click",
+        "MouseButton1Down",
+        "MouseButton1Up",
+        "MouseButton2Click",
+        "MouseButton2Down",
+        "MouseButton2Up",
+        "InputBegan",
+        "InputEnded",
+        "TouchTap",
+    }
+
+    -- Эвристика: если у кнопки есть активные обработчики — это настоящая кнопка
+    -- Проверяем через pcall
+    local hasActivated = false
+    pcall(function()
+        -- Считаем что Activated есть если это TextButton/ImageButton
+        if obj:IsA("TextButton") or obj:IsA("ImageButton") then
+            hasActivated = true
+        end
     end)
+    info.LikelyHandler = hasActivated
+
+    return info
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🖱️ ТОЧНЫЙ ТАП
+-- 🖱️ ТЕСТОВЫЙ КЛИК ПО КНОПКЕ
 -- ═══════════════════════════════════════════════════════
-local function clickAtScreenPosition(x, y)
-    if not x or not y then return false end
-    local topInset = GuiService:GetGuiInset().Y
-    local realY = y + topInset + (Settings.CrosshairOffsetY or 0)
-    showClickIndicator(x, realY)
+local function testClickButton(obj)
+    if not obj or not obj:IsA("GuiButton") then
+        return false, "Не GuiButton"
+    end
 
-    local used = false
-    pcall(function()
-        if typeof(tap) == "function" then
-            tap(x, realY); used = true
-        end
+    local results = {}
+
+    -- Пробуем все методы
+    local ok1 = pcall(function() obj.Activated:Fire() end)
+    table.insert(results, "Activated: " .. (ok1 and "OK" or "fail"))
+
+    local ok2 = pcall(function() obj.MouseButton1Click:Fire() end)
+    table.insert(results, "MouseButton1Click: " .. (ok2 and "OK" or "fail"))
+
+    local ok3 = pcall(function()
+        local pos = obj.AbsolutePosition + obj.AbsoluteSize / 2
+        obj.MouseButton1Down:Fire(pos.X, pos.Y)
+        obj.MouseButton1Up:Fire(pos.X, pos.Y)
     end)
-    if used then return true end
+    table.insert(results, "MouseButton1Down/Up: " .. (ok3 and "OK" or "fail"))
 
-    pcall(function()
-        if typeof(touch) == "function" then
-            touch(x, realY); used = true
-        end
+    local ok4 = pcall(function()
+        if obj.Activate then obj:Activate() end
     end)
-    if used then return true end
+    table.insert(results, "Activate(): " .. (ok4 and "OK" or "fail"))
 
-    pcall(function()
-        VirtualInputManager:SendTouchEvent(
-            Enum.UserInputType.Touch,
-            Enum.UserInputState.Begin,
-            Vector2.new(x, realY)
-        )
-        task.wait(0.08)
-        VirtualInputManager:SendTouchEvent(
-            Enum.UserInputType.Touch,
-            Enum.UserInputState.End,
-            Vector2.new(x, realY)
-        )
+    local ok5 = pcall(function()
+        if obj.Select then obj:Select() end
     end)
+    table.insert(results, "Select(): " .. (ok5 and "OK" or "fail"))
 
-    pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(x, realY, 0, true, game, 1)
+    -- VirtualInputManager — реальный клик по координатам
+    local ok6 = pcall(function()
+        local pos = obj.AbsolutePosition + obj.AbsoluteSize / 2
+        VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
         task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(x, realY, 0, false, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
     end)
+    table.insert(results, "VirtualInput (real click): " .. (ok6 and "OK" or "fail"))
 
-    return true
-end
-
-function fireButtonAction(btnData)
-    if not btnData or not btnData.Pos then return false end
-    clickAtScreenPosition(btnData.Pos.X, btnData.Pos.Y)
-    log("✓ Тап X=" .. btnData.Pos.X .. ", Y=" .. btnData.Pos.Y, Theme.Success)
-    return true
-end
-
--- ═══════════════════════════════════════════════════════
--- 🚪 СИСТЕМА МАРШРУТОВ
--- ═══════════════════════════════════════════════════════
-
--- Папка визуализации
-local VisualsFolder = nil
-local VisualParts = {}
-
-local function clearVisuals()
-    for _, part in ipairs(VisualParts) do
-        pcall(function() part:Destroy() end)
-    end
-    VisualParts = {}
-end
-
-local function createVisualFolder()
-    if VisualsFolder and VisualsFolder.Parent then
-        VisualsFolder:Destroy()
-    end
-    VisualsFolder = Instance.new("Folder")
-    VisualsFolder.Name = "ESP_RouteVisuals"
-    VisualsFolder.Parent = workspace
-end
-
--- Поиск всех дверей RoomExit
-local function findDoors()
-    Doors = {}
-    local count = 0
-
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj.Name == RouteSettings.DoorName
-           and (obj:IsA("BasePart") or obj:IsA("MeshPart")) then
-            local fullPath = obj:GetFullName()
-            local roomNum = tonumber(fullPath:match("Hotel%.(%d+)%."))
-
-            if roomNum then
-                Doors[roomNum] = {
-                    Instance = obj,
-                    Position = obj.Position,
-                    CFrame = obj.CFrame,
-                    FullPath = fullPath,
-                }
-                count = count + 1
-            end
-        end
-    end
-
-    return count
-end
-
--- Получить дверь по номеру
-local function getDoor(roomNum)
-    return Doors[roomNum]
-end
-
--- Точка стопа (слева + позади от двери)
-local function calculateStopPoint(door)
-    if not door or not door.CFrame then return nil end
-
-    local doorLook = door.CFrame.LookVector
-    local doorRight = door.CFrame.RightVector
-
-    local stopPos = door.Position
-        - doorLook * RouteSettings.StopBackOffset
-        - doorRight * RouteSettings.StopLeftOffset
-        + Vector3.new(0, RouteSettings.StopHeightOffset, 0)
-
-    return stopPos
-end
-
--- Построение пути (шаги по StepSize)
-local function buildPath(fromPos, toPos)
-    local path = {}
-    local totalDistance = (toPos - fromPos).Magnitude
-
-    if totalDistance < RouteSettings.StepSize then
-        table.insert(path, toPos)
-        return path
-    end
-
-    local direction = (toPos - fromPos).Unit
-    local steps = math.floor(totalDistance / RouteSettings.StepSize)
-
-    for i = 1, steps do
-        table.insert(path, fromPos + direction * RouteSettings.StepSize * i)
-    end
-
-    table.insert(path, toPos)
-    return path
-end
-
--- Телепорт по пути
-local function teleportAlongPath(path)
-    local myChar = LocalPlayer.Character
-    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return false end
-
-    for i, point in ipairs(path) do
-        myHRP.CFrame = CFrame.new(point)
-        task.wait(RouteSettings.StepDelay)
-    end
-    return true
-end
-
--- Рисование линии
-local function drawPathLine(fromPos, toPos)
-    local dist = (toPos - fromPos).Magnitude
-    if dist < 0.5 then return end
-
-    local part = Instance.new("Part")
-    part.Anchored = true
-    part.CanCollide = false
-    part.Material = Enum.Material.Neon
-    part.Color = Theme.PathLine
-    part.Transparency = 0.4
-    part.Size = Vector3.new(0.4, 0.15, dist)
-    part.CFrame = CFrame.new((fromPos + toPos) / 2, toPos)
-    part.Parent = VisualsFolder
-    table.insert(VisualParts, part)
-end
-
--- Маркер стопа
-local function drawStopMarker(position, number)
-    local circle = Instance.new("Part")
-    circle.Shape = Enum.PartType.Cylinder
-    circle.Anchored = true
-    circle.CanCollide = false
-    circle.Material = Enum.Material.Neon
-    circle.Color = Theme.StopMark
-    circle.Transparency = 0.3
-    circle.Size = Vector3.new(0.3, 8, 8)
-    circle.CFrame = CFrame.new(position - Vector3.new(0, RouteSettings.StopHeightOffset - 0.3, 0))
-        * CFrame.Angles(0, 0, math.rad(90))
-    circle.Parent = VisualsFolder
-    table.insert(VisualParts, circle)
-
-    local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0, 60, 0, 60)
-    billboard.StudsOffset = Vector3.new(0, 5, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Adornee = circle
-    billboard.Parent = circle
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = tostring(number)
-    lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-    lbl.TextStrokeTransparency = 0
-    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextSize = 42
-    lbl.Parent = billboard
-end
-
--- Маркер двери
-local function drawDoorMarker(door, roomNum)
-    local marker = Instance.new("Part")
-    marker.Shape = Enum.PartType.Ball
-    marker.Anchored = true
-    marker.CanCollide = false
-    marker.Material = Enum.Material.Neon
-    marker.Color = Theme.DoorMark
-    marker.Transparency = 0.3
-    marker.Size = Vector3.new(2, 2, 2)
-    marker.CFrame = CFrame.new(door.Position + Vector3.new(0, 4, 0))
-    marker.Parent = VisualsFolder
-    table.insert(VisualParts, marker)
-
-    local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0, 120, 0, 40)
-    billboard.StudsOffset = Vector3.new(0, 2, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Adornee = marker
-    billboard.Parent = marker
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = "🚪 Комната " .. roomNum
-    lbl.TextColor3 = Theme.DoorMark
-    lbl.TextStrokeTransparency = 0
-    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextSize = 14
-    lbl.Parent = billboard
-end
-
--- Главная функция: ехать к комнате
-function goToRoom(roomNum)
-    roomNum = roomNum or RouteSettings.CurrentRoom
-
-    if next(Doors) == nil then
-        local c = findDoors()
-        log("🔍 Найдено дверей: " .. c, Theme.Success)
-    end
-
-    local door = getDoor(roomNum)
-    if not door then
-        log("❌ Дверь комнаты " .. roomNum .. " не найдена", Theme.Danger)
-        return false
-    end
-
-    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myHRP then
-        log("❌ Нет персонажа", Theme.Danger)
-        return false
-    end
-
-    local myPos = myHRP.Position
-    local stopPos = calculateStopPoint(door)
-
-    log("🚪 Едем к комнате " .. roomNum, Theme.Warning)
-    log(string.format("📍 Я: (%.1f, %.1f, %.1f)", myPos.X, myPos.Y, myPos.Z), Theme.TextDim)
-    log(string.format("🚪 Дверь: (%.1f, %.1f, %.1f)", door.Position.X, door.Position.Y, door.Position.Z), Theme.TextDim)
-    log(string.format("🛑 Стоп: (%.1f, %.1f, %.1f)", stopPos.X, stopPos.Y, stopPos.Z), Theme.TextDim)
-
-    local path = buildPath(myPos, stopPos)
-    log("🛤 Точек в пути: " .. #path, Theme.Accent)
-
-    clearVisuals()
-    createVisualFolder()
-
-    local prevPos = myPos
-    for _, point in ipairs(path) do
-        drawPathLine(prevPos, point)
-        prevPos = point
-    end
-
-    drawDoorMarker(door, roomNum)
-    drawStopMarker(stopPos, roomNum)
-
-    log("➡ Телепорт...", Theme.Warning)
-    teleportAlongPath(path)
-    log("✅ Достигли комнаты " .. roomNum, Theme.Success)
-
-    if RouteSettings.AutoNextRoom then
-        RouteSettings.CurrentRoom = RouteSettings.CurrentRoom + 1
-        log("➡ Автоследующая комната: " .. RouteSettings.CurrentRoom, Theme.Warning)
-    end
-
-    return true
-end
-
--- К следующей комнате
-function goToNextRoom()
-    RouteSettings.CurrentRoom = RouteSettings.CurrentRoom + 1
-    log("➡ Комната: " .. RouteSettings.CurrentRoom, Theme.Warning)
-    return goToRoom(RouteSettings.CurrentRoom)
+    return true, table.concat(results, "\n")
 end
 
 -- ═══════════════════════════════════════════════════════
 -- 🖥️ ГЛАВНОЕ ОКНО
 -- ═══════════════════════════════════════════════════════
 local MainGui = Instance.new("ScreenGui")
-MainGui.Name = "ESP_MainUI"
+MainGui.Name = "ObjInspector_UI"
 MainGui.ResetOnSpawn = false
 MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 pcall(function() MainGui.Parent = CoreGui end)
 if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 460, 0, 400)
-MainFrame.Position = UDim2.new(0.5, -230, 0.5, -200)
-MainFrame.BackgroundColor3 = Theme.Bg
+MainFrame.Size = UDim2.new(0, 560, 0, 680)
+MainFrame.Position = UDim2.new(0, 20, 0, 60)
+MainFrame.BackgroundColor3 = Colors.Bg
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Parent = MainGui
 addCorner(MainFrame, 12)
-addStroke(MainFrame, Theme.Border, 1.5)
+addStroke(MainFrame, Colors.Border, 1.5)
 makeDraggable(MainFrame)
 
 -- Заголовок
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 42)
-TitleBar.BackgroundColor3 = Theme.BgLight
+TitleBar.BackgroundColor3 = Colors.BgLight
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
 addCorner(TitleBar, 12)
@@ -560,49 +301,39 @@ addCorner(TitleBar, 12)
 local TitleFix = Instance.new("Frame")
 TitleFix.Size = UDim2.new(1, 0, 0, 12)
 TitleFix.Position = UDim2.new(0, 0, 1, -12)
-TitleFix.BackgroundColor3 = Theme.BgLight
+TitleFix.BackgroundColor3 = Colors.BgLight
 TitleFix.BorderSizePixel = 0
 TitleFix.Parent = TitleBar
 
-local TitleIcon = Instance.new("TextLabel")
-TitleIcon.Text = "🎯"
-TitleIcon.Size = UDim2.new(0, 30, 1, 0)
-TitleIcon.Position = UDim2.new(0, 12, 0, 0)
-TitleIcon.BackgroundTransparency = 1
-TitleIcon.TextColor3 = Theme.Accent
-TitleIcon.Font = Enum.Font.GothamBold
-TitleIcon.TextSize = 18
-TitleIcon.Parent = TitleBar
+local TitleLbl = Instance.new("TextLabel")
+TitleLbl.Text = "🔍 ИНСПЕКТОР ОБЪЕКТОВ v3.0"
+TitleLbl.Size = UDim2.new(1, -150, 1, 0)
+TitleLbl.Position = UDim2.new(0, 12, 0, 0)
+TitleLbl.BackgroundTransparency = 1
+TitleLbl.TextColor3 = Colors.Text
+TitleLbl.Font = Enum.Font.GothamBold
+TitleLbl.TextSize = 15
+TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+TitleLbl.Parent = TitleBar
 
-local Title = Instance.new("TextLabel")
-Title.Text = "ESP  •  AUTO ACTIONS"
-Title.Size = UDim2.new(1, -150, 1, 0)
-Title.Position = UDim2.new(0, 46, 0, 0)
-Title.BackgroundTransparency = 1
-Title.TextColor3 = Theme.Text
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 15
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = TitleBar
-
-local MinimizeBtn = Instance.new("TextButton")
-MinimizeBtn.Text = "—"
-MinimizeBtn.Size = UDim2.new(0, 28, 0, 28)
-MinimizeBtn.Position = UDim2.new(1, -66, 0.5, -14)
-MinimizeBtn.BackgroundColor3 = Theme.BgLighter
-MinimizeBtn.TextColor3 = Theme.Text
-MinimizeBtn.Font = Enum.Font.GothamBold
-MinimizeBtn.TextSize = 16
-MinimizeBtn.BorderSizePixel = 0
-MinimizeBtn.Parent = TitleBar
-addCorner(MinimizeBtn, 6)
+local MinBtn = Instance.new("TextButton")
+MinBtn.Text = "—"
+MinBtn.Size = UDim2.new(0, 28, 0, 28)
+MinBtn.Position = UDim2.new(1, -66, 0.5, -14)
+MinBtn.BackgroundColor3 = Colors.BgLighter
+MinBtn.TextColor3 = Colors.Text
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 16
+MinBtn.BorderSizePixel = 0
+MinBtn.Parent = TitleBar
+addCorner(MinBtn, 6)
 
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Text = "✕"
 CloseBtn.Size = UDim2.new(0, 28, 0, 28)
 CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
-CloseBtn.BackgroundColor3 = Theme.Danger
-CloseBtn.TextColor3 = Theme.Text
+CloseBtn.BackgroundColor3 = Colors.Danger
+CloseBtn.TextColor3 = Colors.Text
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 14
 CloseBtn.BorderSizePixel = 0
@@ -611,881 +342,1095 @@ addCorner(CloseBtn, 6)
 
 -- Вкладки
 local TabBar = Instance.new("Frame")
-TabBar.Size = UDim2.new(1, -24, 0, 36)
+TabBar.Size = UDim2.new(1, -24, 0, 34)
 TabBar.Position = UDim2.new(0, 12, 0, 50)
-TabBar.BackgroundColor3 = Theme.BgLight
+TabBar.BackgroundColor3 = Colors.BgLight
 TabBar.BorderSizePixel = 0
 TabBar.Parent = MainFrame
 addCorner(TabBar, 8)
 
 local ContentFrame = Instance.new("Frame")
 ContentFrame.Size = UDim2.new(1, -24, 1, -108)
-ContentFrame.Position = UDim2.new(0, 12, 0, 94)
-ContentFrame.BackgroundColor3 = Theme.BgLight
+ContentFrame.Position = UDim2.new(0, 12, 0, 92)
+ContentFrame.BackgroundColor3 = Colors.BgLight
 ContentFrame.BorderSizePixel = 0
 ContentFrame.Parent = MainFrame
 addCorner(ContentFrame, 10)
 
--- Консоль
-ConsoleTab = Instance.new("ScrollingFrame")
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "ИНСПЕКТОР"
+-- ═══════════════════════════════════════════════════════
+local InspectorTab = Instance.new("Frame")
+InspectorTab.Size = UDim2.new(1, -12, 1, -12)
+InspectorTab.Position = UDim2.new(0, 6, 0, 6)
+InspectorTab.BackgroundTransparency = 1
+InspectorTab.Visible = true
+InspectorTab.Parent = ContentFrame
+
+local StatusFrame = Instance.new("Frame")
+StatusFrame.Size = UDim2.new(1, 0, 0, 60)
+StatusFrame.BackgroundColor3 = Colors.Bg
+StatusFrame.BorderSizePixel = 0
+StatusFrame.Parent = InspectorTab
+addCorner(StatusFrame, 8)
+
+local StatusTitle = Instance.new("TextLabel")
+StatusTitle.Text = "Активный объект:"
+StatusTitle.Size = UDim2.new(1, -16, 0, 16)
+StatusTitle.Position = UDim2.new(0, 8, 0, 4)
+StatusTitle.BackgroundTransparency = 1
+StatusTitle.TextColor3 = Colors.TextDim
+StatusTitle.Font = Enum.Font.Gotham
+StatusTitle.TextSize = 11
+StatusTitle.TextXAlignment = Enum.TextXAlignment.Left
+StatusTitle.Parent = StatusFrame
+
+local StatusText = Instance.new("TextLabel")
+StatusText.Text = "Кликни по объекту в мире"
+StatusText.Size = UDim2.new(1, -16, 0, 20)
+StatusText.Position = UDim2.new(0, 8, 0, 20)
+StatusText.BackgroundTransparency = 1
+StatusText.TextColor3 = Colors.Warning
+StatusText.Font = Enum.Font.GothamBold
+StatusText.TextSize = 13
+StatusText.TextXAlignment = Enum.TextXAlignment.Left
+StatusText.TextTruncate = Enum.TextTruncate.AtEnd
+StatusText.Parent = StatusFrame
+
+local StatusPos = Instance.new("TextLabel")
+StatusPos.Text = ""
+StatusPos.Size = UDim2.new(1, -16, 0, 16)
+StatusPos.Position = UDim2.new(0, 8, 0, 40)
+StatusPos.BackgroundTransparency = 1
+StatusPos.TextColor3 = Colors.Success
+StatusPos.Font = Enum.Font.Code
+StatusPos.TextSize = 11
+StatusPos.TextXAlignment = Enum.TextXAlignment.Left
+StatusPos.Parent = StatusFrame
+
+-- Кнопки управления
+local BtnBar = Instance.new("Frame")
+BtnBar.Size = UDim2.new(1, 0, 0, 34)
+BtnBar.Position = UDim2.new(0, 0, 0, 68)
+BtnBar.BackgroundTransparency = 1
+BtnBar.Parent = InspectorTab
+
+local SelectModeBtn = Instance.new("TextButton")
+SelectModeBtn.Text = "🎯 ВЫБОР: ВКЛ"
+SelectModeBtn.Size = UDim2.new(0.25, -2, 1, 0)
+SelectModeBtn.Position = UDim2.new(0, 0, 0, 0)
+SelectModeBtn.BackgroundColor3 = Colors.Success
+SelectModeBtn.TextColor3 = Colors.Text
+SelectModeBtn.Font = Enum.Font.GothamBold
+SelectModeBtn.TextSize = 10
+SelectModeBtn.BorderSizePixel = 0
+SelectModeBtn.AutoButtonColor = false
+SelectModeBtn.Parent = BtnBar
+addCorner(SelectModeBtn, 8)
+
+local EToAllBtn = Instance.new("TextButton")
+EToAllBtn.Text = "📌 E to all"
+EToAllBtn.Size = UDim2.new(0.25, -2, 1, 0)
+EToAllBtn.Position = UDim2.new(0.25, 1, 0, 0)
+EToAllBtn.BackgroundColor3 = Colors.Warning
+EToAllBtn.TextColor3 = Colors.Text
+EToAllBtn.Font = Enum.Font.GothamBold
+EToAllBtn.TextSize = 10
+EToAllBtn.BorderSizePixel = 0
+EToAllBtn.AutoButtonColor = false
+EToAllBtn.Parent = BtnBar
+addCorner(EToAllBtn, 8)
+
+local EToButtonsBtn = Instance.new("TextButton")
+EToButtonsBtn.Text = "🖱 E to buttons"
+EToButtonsBtn.Size = UDim2.new(0.25, -2, 1, 0)
+EToButtonsBtn.Position = UDim2.new(0.5, 1, 0, 0)
+EToButtonsBtn.BackgroundColor3 = Colors.ButtonCol
+EToButtonsBtn.TextColor3 = Colors.Text
+EToButtonsBtn.Font = Enum.Font.GothamBold
+EToButtonsBtn.TextSize = 10
+EToButtonsBtn.BorderSizePixel = 0
+EToButtonsBtn.AutoButtonColor = false
+EToButtonsBtn.Parent = BtnBar
+addCorner(EToButtonsBtn, 8)
+
+local CopyBtn = Instance.new("TextButton")
+CopyBtn.Text = "📋 Лог"
+CopyBtn.Size = UDim2.new(0.25, -2, 1, 0)
+CopyBtn.Position = UDim2.new(0.75, 1, 0, 0)
+CopyBtn.BackgroundColor3 = Colors.Accent
+CopyBtn.TextColor3 = Colors.Text
+CopyBtn.Font = Enum.Font.GothamBold
+CopyBtn.TextSize = 10
+CopyBtn.BorderSizePixel = 0
+CopyBtn.AutoButtonColor = false
+CopyBtn.Parent = BtnBar
+addCorner(CopyBtn, 8)
+
+-- Спец-панель для кнопок (показывается только когда выбрана кнопка)
+local ButtonPanel = Instance.new("Frame")
+ButtonPanel.Size = UDim2.new(1, 0, 0, 100)
+ButtonPanel.Position = UDim2.new(0, 0, 0, 108)
+ButtonPanel.BackgroundColor3 = Colors.Bg
+ButtonPanel.BorderSizePixel = 0
+ButtonPanel.Visible = false
+ButtonPanel.Parent = InspectorTab
+addCorner(ButtonPanel, 8)
+addStroke(ButtonPanel, Colors.ButtonCol, 2)
+
+local BP_Title = Instance.new("TextLabel")
+BP_Title.Text = "🖱 ИНФО О КНОПКЕ"
+BP_Title.Size = UDim2.new(1, -16, 0, 18)
+BP_Title.Position = UDim2.new(0, 8, 0, 4)
+BP_Title.BackgroundTransparency = 1
+BP_Title.TextColor3 = Colors.ButtonCol
+BP_Title.Font = Enum.Font.GothamBold
+BP_Title.TextSize = 11
+BP_Title.TextXAlignment = Enum.TextXAlignment.Left
+BP_Title.Parent = ButtonPanel
+
+local BP_Path = Instance.new("TextLabel")
+BP_Path.Text = ""
+BP_Path.Size = UDim2.new(1, -16, 0, 16)
+BP_Path.Position = UDim2.new(0, 8, 0, 22)
+BP_Path.BackgroundTransparency = 1
+BP_Path.TextColor3 = Colors.CodeCol
+BP_Path.Font = Enum.Font.Code
+BP_Path.TextSize = 10
+BP_Path.TextXAlignment = Enum.TextXAlignment.Left
+BP_Path.TextTruncate = Enum.TextTruncate.AtEnd
+BP_Path.Parent = ButtonPanel
+
+local BP_Info = Instance.new("TextLabel")
+BP_Info.Text = ""
+BP_Info.Size = UDim2.new(1, -16, 0, 16)
+BP_Info.Position = UDim2.new(0, 8, 0, 38)
+BP_Info.BackgroundTransparency = 1
+BP_Info.TextColor3 = Colors.Text
+BP_Info.Font = Enum.Font.Gotham
+BP_Info.TextSize = 10
+BP_Info.TextXAlignment = Enum.TextXAlignment.Left
+BP_Info.Parent = ButtonPanel
+
+-- Кнопки для работы с кнопкой
+local BP_CopyCodeBtn = Instance.new("TextButton")
+BP_CopyCodeBtn.Text = "📋 Копировать код вызова"
+BP_CopyCodeBtn.Size = UDim2.new(0.5, -12, 0, 24)
+BP_CopyCodeBtn.Position = UDim2.new(0, 8, 1, -30)
+BP_CopyCodeBtn.BackgroundColor3 = Colors.Success
+BP_CopyCodeBtn.TextColor3 = Colors.Text
+BP_CopyCodeBtn.Font = Enum.Font.GothamBold
+BP_CopyCodeBtn.TextSize = 10
+BP_CopyCodeBtn.BorderSizePixel = 0
+BP_CopyCodeBtn.AutoButtonColor = false
+BP_CopyCodeBtn.Parent = ButtonPanel
+addCorner(BP_CopyCodeBtn, 6)
+
+local BP_TestClickBtn = Instance.new("TextButton")
+BP_TestClickBtn.Text = "🧪 Проверить клик"
+BP_TestClickBtn.Size = UDim2.new(0.5, -12, 0, 24)
+BP_TestClickBtn.Position = UDim2.new(0.5, 4, 1, -30)
+BP_TestClickBtn.BackgroundColor3 = Colors.Warning
+BP_TestClickBtn.TextColor3 = Colors.Text
+BP_TestClickBtn.Font = Enum.Font.GothamBold
+BP_TestClickBtn.TextSize = 10
+BP_TestClickBtn.BorderSizePixel = 0
+BP_TestClickBtn.AutoButtonColor = false
+BP_TestClickBtn.Parent = ButtonPanel
+addCorner(BP_TestClickBtn, 6)
+
+-- Переключатель Свойства / Дети
+local TabSwitch = Instance.new("Frame")
+TabSwitch.Size = UDim2.new(1, 0, 0, 30)
+TabSwitch.Position = UDim2.new(0, 0, 0, 216)
+TabSwitch.BackgroundTransparency = 1
+TabSwitch.Visible = false
+TabSwitch.Parent = InspectorTab
+
+local PropsTabBtn = Instance.new("TextButton")
+PropsTabBtn.Text = "Свойства"
+PropsTabBtn.Size = UDim2.new(0.5, -2, 1, 0)
+PropsTabBtn.BackgroundColor3 = Colors.Accent
+PropsTabBtn.TextColor3 = Colors.Text
+PropsTabBtn.Font = Enum.Font.GothamBold
+PropsTabBtn.TextSize = 12
+PropsTabBtn.BorderSizePixel = 0
+PropsTabBtn.AutoButtonColor = false
+PropsTabBtn.Parent = TabSwitch
+addCorner(PropsTabBtn, 6)
+
+local ChildrenTabBtn = Instance.new("TextButton")
+ChildrenTabBtn.Text = "Дети"
+ChildrenTabBtn.Size = UDim2.new(0.5, -2, 1, 0)
+ChildrenTabBtn.Position = UDim2.new(0.5, 2, 0, 0)
+ChildrenTabBtn.BackgroundColor3 = Colors.BgLighter
+ChildrenTabBtn.TextColor3 = Colors.Text
+ChildrenTabBtn.Font = Enum.Font.GothamBold
+ChildrenTabBtn.TextSize = 12
+ChildrenTabBtn.BorderSizePixel = 0
+ChildrenTabBtn.AutoButtonColor = false
+ChildrenTabBtn.Parent = TabSwitch
+addCorner(ChildrenTabBtn, 6)
+
+-- Поиск
+local SearchBox = Instance.new("TextBox")
+SearchBox.Size = UDim2.new(1, 0, 0, 28)
+SearchBox.Position = UDim2.new(0, 0, 0, 252)
+SearchBox.BackgroundColor3 = Colors.BgLighter
+SearchBox.PlaceholderText = "🔎 Поиск свойства..."
+SearchBox.PlaceholderColor3 = Colors.TextDim
+SearchBox.Text = ""
+SearchBox.TextColor3 = Colors.Text
+SearchBox.Font = Enum.Font.Gotham
+SearchBox.TextSize = 13
+SearchBox.BorderSizePixel = 0
+SearchBox.ClearTextOnFocus = false
+SearchBox.Parent = InspectorTab
+addCorner(SearchBox, 6)
+
+-- Список свойств
+local PropsList = Instance.new("ScrollingFrame")
+PropsList.Size = UDim2.new(1, 0, 1, -288)
+PropsList.Position = UDim2.new(0, 0, 0, 286)
+PropsList.BackgroundColor3 = Colors.Bg
+PropsList.BorderSizePixel = 0
+PropsList.ScrollBarThickness = 6
+PropsList.ScrollBarImageColor3 = Colors.Accent
+PropsList.CanvasSize = UDim2.new(0, 0, 0, 0)
+PropsList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+PropsList.Parent = InspectorTab
+addCorner(PropsList, 8)
+
+local PropsLayout = Instance.new("UIListLayout")
+PropsLayout.Padding = UDim.new(0, 4)
+PropsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+PropsLayout.Parent = PropsList
+
+local ChildrenList = Instance.new("ScrollingFrame")
+ChildrenList.Size = UDim2.new(1, 0, 1, -288)
+ChildrenList.Position = UDim2.new(0, 0, 0, 286)
+ChildrenList.BackgroundColor3 = Colors.Bg
+ChildrenList.BorderSizePixel = 0
+ChildrenList.ScrollBarThickness = 6
+ChildrenList.ScrollBarImageColor3 = Colors.Accent
+ChildrenList.CanvasSize = UDim2.new(0, 0, 0, 0)
+ChildrenList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ChildrenList.Visible = false
+ChildrenList.Parent = InspectorTab
+addCorner(ChildrenList, 8)
+
+local ChildrenLayout = Instance.new("UIListLayout")
+ChildrenLayout.Padding = UDim.new(0, 4)
+ChildrenLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ChildrenLayout.Parent = ChildrenList
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "КОНСОЛЬ"
+-- ═══════════════════════════════════════════════════════
+local ConsoleTab = Instance.new("Frame")
 ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
 ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
 ConsoleTab.BackgroundTransparency = 1
-ConsoleTab.BorderSizePixel = 0
-ConsoleTab.ScrollBarThickness = 5
-ConsoleTab.ScrollBarImageColor3 = Theme.Accent
-ConsoleTab.CanvasSize = UDim2.new(0, 0, 0, 0)
-ConsoleTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
-ConsoleTab.Visible = true
+ConsoleTab.Visible = false
 ConsoleTab.Parent = ContentFrame
 
+local ConsoleTopBar = Instance.new("Frame")
+ConsoleTopBar.Size = UDim2.new(1, 0, 0, 34)
+ConsoleTopBar.BackgroundColor3 = Colors.Bg
+ConsoleTopBar.BorderSizePixel = 0
+ConsoleTopBar.Parent = ConsoleTab
+addCorner(ConsoleTopBar, 8)
+
+local ConsoleTitle = Instance.new("TextLabel")
+ConsoleTitle.Text = "📃 КОНСОЛЬ"
+ConsoleTitle.Size = UDim2.new(0.5, -10, 1, 0)
+ConsoleTitle.Position = UDim2.new(0, 10, 0, 0)
+ConsoleTitle.BackgroundTransparency = 1
+ConsoleTitle.TextColor3 = Colors.Text
+ConsoleTitle.Font = Enum.Font.GothamBold
+ConsoleTitle.TextSize = 13
+ConsoleTitle.TextXAlignment = Enum.TextXAlignment.Left
+ConsoleTitle.Parent = ConsoleTopBar
+
+local ClearConsoleBtn = Instance.new("TextButton")
+ClearConsoleBtn.Text = "🗑 Очистить"
+ClearConsoleBtn.Size = UDim2.new(0.5, -5, 0, 26)
+ClearConsoleBtn.Position = UDim2.new(0.5, 0, 0.5, -13)
+ClearConsoleBtn.BackgroundColor3 = Colors.Danger
+ClearConsoleBtn.TextColor3 = Colors.Text
+ClearConsoleBtn.Font = Enum.Font.GothamBold
+ClearConsoleBtn.TextSize = 11
+ClearConsoleBtn.BorderSizePixel = 0
+ClearConsoleBtn.AutoButtonColor = false
+ClearConsoleBtn.Parent = ConsoleTopBar
+addCorner(ClearConsoleBtn, 6)
+
+local ConsoleList = Instance.new("ScrollingFrame")
+ConsoleList.Size = UDim2.new(1, 0, 1, -42)
+ConsoleList.Position = UDim2.new(0, 0, 0, 42)
+ConsoleList.BackgroundColor3 = Colors.Bg
+ConsoleList.BorderSizePixel = 0
+ConsoleList.ScrollBarThickness = 6
+ConsoleList.ScrollBarImageColor3 = Colors.Accent
+ConsoleList.CanvasSize = UDim2.new(0, 0, 0, 0)
+ConsoleList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ConsoleList.Parent = ConsoleTab
+addCorner(ConsoleList, 8)
+
 local ConsoleLayout = Instance.new("UIListLayout")
-ConsoleLayout.Padding = UDim.new(0, 3)
+ConsoleLayout.Padding = UDim.new(0, 2)
 ConsoleLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ConsoleLayout.Parent = ConsoleTab
-
-log("Консоль инициализирована", Theme.TextDim)
-
--- Тест
-local TestTab = Instance.new("ScrollingFrame")
-TestTab.Size = UDim2.new(1, -12, 1, -12)
-TestTab.Position = UDim2.new(0, 6, 0, 6)
-TestTab.BackgroundTransparency = 1
-TestTab.BorderSizePixel = 0
-TestTab.ScrollBarThickness = 5
-TestTab.ScrollBarImageColor3 = Theme.Accent
-TestTab.CanvasSize = UDim2.new(0, 0, 0, 700)
-TestTab.Visible = false
-TestTab.Parent = ContentFrame
-
-local TestLayout = Instance.new("UIListLayout")
-TestLayout.Padding = UDim.new(0, 8)
-TestLayout.Parent = TestTab
-
--- Настройки
-local SettingsTab = Instance.new("ScrollingFrame")
-SettingsTab.Size = UDim2.new(1, -12, 1, -12)
-SettingsTab.Position = UDim2.new(0, 6, 0, 6)
-SettingsTab.BackgroundTransparency = 1
-SettingsTab.BorderSizePixel = 0
-SettingsTab.ScrollBarThickness = 5
-SettingsTab.ScrollBarImageColor3 = Theme.Accent
-SettingsTab.CanvasSize = UDim2.new(0, 0, 0, 0)
-SettingsTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
-SettingsTab.Visible = false
-SettingsTab.Parent = ContentFrame
-
-local SettingsLayout = Instance.new("UIListLayout")
-SettingsLayout.Padding = UDim.new(0, 6)
-SettingsLayout.Parent = SettingsTab
+ConsoleLayout.Parent = ConsoleList
 
 -- ═══════════════════════════════════════════════════════
--- 🧱 UI-КОМПОНЕНТЫ
+-- 📃 GUI-КОНСОЛЬ
 -- ═══════════════════════════════════════════════════════
-local function makeSection(parent, text)
-    local s = Instance.new("TextLabel")
-    s.Text = "  " .. text
-    s.Size = UDim2.new(1, 0, 0, 26)
-    s.BackgroundColor3 = Theme.Bg
-    s.TextColor3 = Theme.Accent
-    s.Font = Enum.Font.GothamBold
-    s.TextSize = 12
-    s.TextXAlignment = Enum.TextXAlignment.Left
-    s.BorderSizePixel = 0
-    s.Parent = parent
-    addCorner(s, 6)
-    return s
-end
+local LogCount = 0
+local function guiLog(text, color)
+    LogCount = LogCount + 1
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -8, 0, 18)
+    label.BackgroundTransparency = 1
+    label.Text = "[" .. os.date("%H:%M:%S") .. "]  " .. tostring(text)
+    label.TextColor3 = color or Colors.LogText
+    label.Font = Enum.Font.Code
+    label.TextSize = 11
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextWrapped = true
+    label.Parent = ConsoleList
 
-local function makeButton(parent, text, callback, color)
-    local btn = Instance.new("TextButton")
-    btn.Text = text
-    btn.Size = UDim2.new(1, 0, 0, 38)
-    btn.BackgroundColor3 = color or Theme.BgLighter
-    btn.TextColor3 = Theme.Text
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 14
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = parent
-    addCorner(btn, 8)
-    btn:SetAttribute("BaseColor", color or Theme.BgLighter)
-    btn.MouseEnter:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Theme.AccentHover
-        }):Play()
+    task.defer(function()
+        ConsoleList.CanvasPosition = Vector2.new(0, ConsoleList.AbsoluteCanvasSize.Y)
     end)
-    btn.MouseLeave:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.15), {
-            BackgroundColor3 = btn:GetAttribute("BaseColor")
-        }):Play()
-    end)
-    btn.MouseButton1Click:Connect(callback)
-    return btn
-end
 
-local function makeToggle(parent, text, default, callback)
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
-    row.BorderSizePixel = 0
-    row.Parent = parent
-    addCorner(row, 8)
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Text = text
-    lbl.Size = UDim2.new(1, -80, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Theme.Text
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = row
-
-    local state = default
-    local toggle = Instance.new("TextButton")
-    toggle.Size = UDim2.new(0, 54, 0, 22)
-    toggle.Position = UDim2.new(1, -64, 0.5, -11)
-    toggle.BackgroundColor3 = state and Theme.Success or Theme.BgLighter
-    toggle.Text = state and "ВКЛ" or "ВЫКЛ"
-    toggle.TextColor3 = Theme.Text
-    toggle.Font = Enum.Font.GothamBold
-    toggle.TextSize = 11
-    toggle.BorderSizePixel = 0
-    toggle.AutoButtonColor = false
-    toggle.Parent = row
-    addCorner(toggle, 11)
-    toggle.MouseButton1Click:Connect(function()
-        state = not state
-        TweenService:Create(toggle, TweenInfo.new(0.15), {
-            BackgroundColor3 = state and Theme.Success or Theme.BgLighter
-        }):Play()
-        toggle.Text = state and "ВКЛ" or "ВЫКЛ"
-        callback(state)
-    end)
-    return row
-end
-
-local function makeInput(parent, text, default, callback)
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
-    row.BorderSizePixel = 0
-    row.Parent = parent
-    addCorner(row, 8)
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Text = text
-    lbl.Size = UDim2.new(0.55, -12, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Theme.Text
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = row
-
-    local input = Instance.new("TextBox")
-    input.Size = UDim2.new(0.45, -12, 0, 24)
-    input.Position = UDim2.new(0.55, 0, 0.5, -12)
-    input.BackgroundColor3 = Theme.BgLighter
-    input.Text = tostring(default)
-    input.TextColor3 = Theme.Text
-    input.Font = Enum.Font.Gotham
-    input.TextSize = 12
-    input.BorderSizePixel = 0
-    input.ClearTextOnFocus = false
-    input.Parent = row
-    addCorner(input, 6)
-
-    input.FocusLost:Connect(function()
-        local num = tonumber(input.Text)
-        if num then callback(num) end
-    end)
-    return row
-end
-
--- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "ТЕСТ"
--- ═══════════════════════════════════════════════════════
-local function makeTestBtn(text, callback, color)
-    return makeButton(TestTab, text, callback, color)
-end
-
-makeSection(TestTab, "МАРШРУТ")
-
-makeTestBtn("🚪 К комнате", function()
-    goToRoom(RouteSettings.CurrentRoom)
-end, Theme.Success)
-
-makeTestBtn("➡ Следующая комната", function()
-    goToNextRoom()
-end, Theme.Warning)
-
-makeTestBtn("🔍 Найти все двери (RoomExit)", function()
-    local c = findDoors()
-    log("🔍 Найдено дверей: " .. c, Theme.Success)
-    local nums = {}
-    for num, _ in pairs(Doors) do
-        table.insert(nums, num)
-    end
-    table.sort(nums)
-    for _, num in ipairs(nums) do
-        local d = Doors[num]
-        log(string.format("  Комната %s → (%.1f, %.1f, %.1f)",
-            num, d.Position.X, d.Position.Y, d.Position.Z), Theme.TextDim)
-    end
-end, Theme.Accent)
-
-makeTestBtn("🗑 Очистить визуализацию", function()
-    clearVisuals()
-    log("🗑 Визуализация очищена", Theme.Warning)
-end, Theme.Danger)
-
-makeSection(TestTab, "КООРДИНАТЫ КНОПОК")
-
-makeTestBtn("▶  Активировать", function()
-    if Settings.Buttons.Activate then
-        fireButtonAction(Settings.Buttons.Activate)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🎫 Выдать билет", function()
-    if Settings.Buttons.GiveTicket then
-        fireButtonAction(Settings.Buttons.GiveTicket)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔫 Проверить оружие", function()
-    if Settings.Buttons.CheckWeapon then
-        fireButtonAction(Settings.Buttons.CheckWeapon)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("⏹  Деактивировать", function()
-    if Settings.Buttons.Deactivate then
-        fireButtonAction(Settings.Buttons.Deactivate)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔢 Увеличение номера", function()
-    if Settings.Buttons.IncreaseNumber then
-        fireButtonAction(Settings.Buttons.IncreaseNumber)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeSection(TestTab, "ESP")
-
-makeTestBtn("🧪 Найти игроков в радиусе", function()
-    local found = 0
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                if d <= Settings.TriggerRadius then
-                    found = found + 1
-                    log("Найден: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
-                end
-            end
-        end
-    end
-    log("Всего в радиусе: " .. found, found > 0 and Theme.Success or Theme.TextDim)
-end)
-
-makeTestBtn("🔄 Сбросить состояние", function()
-    ActionState = "idle"
-    StateTimer = 0
-    ProcessedPlayers = {}
-    IgnoredPlayers = {}
-    Queue = {}
-    log("Состояние сброшено", Theme.Warning)
-end, Theme.Danger)
-
--- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "НАСТРОЙКИ"
--- ═══════════════════════════════════════════════════════
-makeSection(SettingsTab, "МАРШРУТ")
-makeInput(SettingsTab, "Текущая комната (номер)", RouteSettings.CurrentRoom, function(v)
-    RouteSettings.CurrentRoom = v
-end)
-makeInput(SettingsTab, "Шаг телепорта (studs)", RouteSettings.StepSize, function(v)
-    RouteSettings.StepSize = v
-end)
-makeInput(SettingsTab, "Задержка шага (сек)", RouteSettings.StepDelay, function(v)
-    RouteSettings.StepDelay = v
-end)
-makeInput(SettingsTab, "Сдвиг влево от двери", RouteSettings.StopLeftOffset, function(v)
-    RouteSettings.StopLeftOffset = v
-end)
-makeInput(SettingsTab, "Сдвиг назад от двери", RouteSettings.StopBackOffset, function(v)
-    RouteSettings.StopBackOffset = v
-end)
-makeInput(SettingsTab, "Высота стопа", RouteSettings.StopHeightOffset, function(v)
-    RouteSettings.StopHeightOffset = v
-end)
-makeToggle(SettingsTab, "Авто переход к след. комнате", RouteSettings.AutoNextRoom, function(v)
-    RouteSettings.AutoNextRoom = v
-end)
-
-makeSection(SettingsTab, "АВТОДЕЙСТВИЯ")
-makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
-    Settings.AutoActions = v
-    log("Автодействия: " .. (v and "ВКЛ" or "ВЫКЛ"), v and Theme.Success or Theme.TextDim)
-end)
-makeToggle(SettingsTab, "Нажимать «Активировать»", Settings.DoActivate, function(v) Settings.DoActivate = v end)
-makeToggle(SettingsTab, "Нажимать «Выдать билет»", Settings.DoGiveTicket, function(v) Settings.DoGiveTicket = v end)
-makeToggle(SettingsTab, "Нажимать «Проверить оружие»", Settings.DoCheckWeapon, function(v) Settings.DoCheckWeapon = v end)
-makeToggle(SettingsTab, "Нажимать «Деактивировать»", Settings.DoDeactivate, function(v) Settings.DoDeactivate = v end)
-
-makeSection(SettingsTab, "ПАРАМЕТРЫ")
-makeInput(SettingsTab, "Радиус обнаружения (м)", Settings.TriggerRadius, function(v) Settings.TriggerRadius = v end)
-makeInput(SettingsTab, "Порог приближения (м)", Settings.ApproachThreshold, function(v) Settings.ApproachThreshold = v end)
-makeInput(SettingsTab, "Ожидание после Активировать (с)", Settings.WaitAfterActivate, function(v) Settings.WaitAfterActivate = v end)
-makeInput(SettingsTab, "Ожидание перед Проверить (с)", Settings.WaitBeforeCheck, function(v) Settings.WaitBeforeCheck = v end)
-makeInput(SettingsTab, "Ожидание перед Деактивировать (с)", Settings.WaitBeforeDeactivate, function(v) Settings.WaitBeforeDeactivate = v end)
-makeInput(SettingsTab, "Ожидание если ушёл (с)", Settings.WaitLeftWithoutApproach, function(v) Settings.WaitLeftWithoutApproach = v end)
-makeInput(SettingsTab, "Задержка между игроками (с)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
-makeInput(SettingsTab, "Игнор после деактивации (с)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
-
-makeSection(SettingsTab, "ESP")
-makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Settings.Enabled = v end)
-makeToggle(SettingsTab, "Показывать имя", Settings.ShowName, function(v) Settings.ShowName = v end)
-makeToggle(SettingsTab, "Показывать здоровье", Settings.ShowHealth, function(v) Settings.ShowHealth = v end)
-makeToggle(SettingsTab, "Показывать дистанцию", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
-makeToggle(SettingsTab, "Показывать статус", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
-makeToggle(SettingsTab, "Проверка команды", Settings.TeamCheck, function(v) Settings.TeamCheck = v end)
-
-makeSection(SettingsTab, "ОТЛАДКА")
-makeToggle(SettingsTab, "Показывать индикатор клика", Settings.ShowClickIndicator, function(v)
-    Settings.ShowClickIndicator = v
-end)
-makeInput(SettingsTab, "Сдвиг по Y (если не попадает)", Settings.CrosshairOffsetY, function(v)
-    Settings.CrosshairOffsetY = v
-    log("Сдвиг по Y: " .. v, Theme.Warning)
-end)
-
-makeSection(SettingsTab, "КООРДИНАТЫ КНОПОК")
-
-local buttonLabelRefs = {}
-
-local function makeButtonSetter(name, key)
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = Theme.Bg
-    row.BorderSizePixel = 0
-    row.Parent = SettingsTab
-    addCorner(row, 8)
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Text = name
-    lbl.Size = UDim2.new(0.5, -12, 1, 0)
-    lbl.Position = UDim2.new(0, 12, 0, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = Theme.Text
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 12
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = row
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.5, -12, 0, 24)
-    btn.Position = UDim2.new(0.5, 0, 0.5, -12)
-    btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
-    btn.Text = Settings.Buttons[key] and "✓ Задано" or "Выбрать"
-    btn.TextColor3 = Theme.Text
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = row
-    addCorner(btn, 6)
-
-    btn.MouseButton1Click:Connect(function()
-        openCrosshairPicker(key, name)
-    end)
-    buttonLabelRefs[key] = {btn = btn, name = name}
-end
-
-getgenv().refreshButtonLabels = function()
-    for key, ref in pairs(buttonLabelRefs) do
-        local data = Settings.Buttons[key]
-        if data and data.Pos then
-            ref.btn.Text = string.format("✓ X=%d, Y=%d", data.Pos.X, data.Pos.Y)
-            ref.btn.BackgroundColor3 = Theme.Success
-        else
-            ref.btn.Text = "Выбрать"
-            ref.btn.BackgroundColor3 = Theme.Warning
-        end
+    if LogCount > 200 then
+        local first = ConsoleList:FindFirstChildOfClass("TextLabel")
+        if first then first:Destroy() end
+        LogCount = LogCount - 1
     end
 end
 
+guiLog("✅ Инспектор v3.0 загружен!", Colors.Success)
+guiLog("🎯 Клик по объекту → инфа", Colors.Warning)
+guiLog("🖱 Клик по кнопке → её путь + метод", Colors.ButtonCol)
+guiLog("📌 E to all → маркеры над объектами", Colors.EColor)
+guiLog("🖱 E to buttons → маркеры над кнопками GUI", Colors.ButtonCol)
+
 -- ═══════════════════════════════════════════════════════
--- 🎯 ПРИЦЕЛ
+-- 🎯 ВЫДЕЛЕНИЕ
 -- ═══════════════════════════════════════════════════════
-local CrosshairGui = Instance.new("ScreenGui")
-CrosshairGui.Name = "ESP_Crosshair"
-CrosshairGui.ResetOnSpawn = false
-CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-CrosshairGui.IgnoreGuiInset = true
-CrosshairGui.DisplayOrder = 999
-CrosshairGui.Enabled = false
-pcall(function() CrosshairGui.Parent = CoreGui end)
-if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+local HighlightGui = Instance.new("ScreenGui")
+HighlightGui.Name = "ObjInspector_Highlight"
+HighlightGui.ResetOnSpawn = false
+HighlightGui.Parent = MainGui
 
-local CrossHandle = Instance.new("TextButton")
-CrossHandle.Name = "CrossHandle"
-CrossHandle.Size = UDim2.new(0, 80, 0, 80)
-CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
-CrossHandle.BackgroundTransparency = 1
-CrossHandle.Text = ""
-CrossHandle.AutoButtonColor = false
-CrossHandle.Active = true
-CrossHandle.ZIndex = 100
-CrossHandle.Parent = CrosshairGui
+local SelectionBox = Instance.new("SelectionBox")
+SelectionBox.Name = "InspectorSelection"
+SelectionBox.LineThickness = 0.1
+SelectionBox.Color3 = Colors.Highlight
+SelectionBox.Transparency = 0.3
+SelectionBox.Visible = false
+SelectionBox.Parent = HighlightGui
 
-local CrossH = Instance.new("Frame")
-CrossH.Size = UDim2.new(0, 60, 0, 2)
-CrossH.Position = UDim2.new(0.5, -30, 0.5, -1)
-CrossH.BackgroundColor3 = Settings.CrosshairColor
-CrossH.BorderSizePixel = 0
-CrossH.Parent = CrossHandle
+-- ═══════════════════════════════════════════════════════
+-- 📌 E-МАРКЕРЫ ДЛЯ ОБЪЕКТОВ
+-- ═══════════════════════════════════════════════════════
+local EMarkersGui = Instance.new("ScreenGui")
+EMarkersGui.Name = "ObjInspector_EMarkers"
+EMarkersGui.ResetOnSpawn = false
+EMarkersGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() EMarkersGui.Parent = CoreGui end)
+if not EMarkersGui.Parent then EMarkersGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
-local CrossV = Instance.new("Frame")
-CrossV.Size = UDim2.new(0, 2, 0, 60)
-CrossV.Position = UDim2.new(0.5, -1, 0.5, -30)
-CrossV.BackgroundColor3 = Settings.CrosshairColor
-CrossV.BorderSizePixel = 0
-CrossV.Parent = CrossHandle
+local EMarkers = {}
+local EMarkersEnabled = false
+local MaxEMarkers = 150
 
-local CrossDot = Instance.new("Frame")
-CrossDot.Size = UDim2.new(0, 8, 0, 8)
-CrossDot.Position = UDim2.new(0.5, -4, 0.5, -4)
-CrossDot.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
-CrossDot.BorderSizePixel = 0
-CrossDot.ZIndex = 101
-CrossDot.Parent = CrossHandle
-addCorner(CrossDot, 4)
+local function createEMarker(instance)
+    if EMarkers[instance] then return end
+    if not instance or not instance.Parent then return end
+    if not (instance:IsA("BasePart") or instance:IsA("Model")) then return end
+    if instance:IsDescendantOf(LocalPlayer.Character) then return end
 
-local dotStroke = Instance.new("UIStroke")
-dotStroke.Color = Color3.fromRGB(0, 0, 0); dotStroke.Thickness = 2; dotStroke.Parent = CrossDot
-local hStroke = Instance.new("UIStroke")
-hStroke.Color = Color3.fromRGB(0, 0, 0); hStroke.Thickness = 2; hStroke.Parent = CrossH
-local vStroke = Instance.new("UIStroke")
-vStroke.Color = Color3.fromRGB(0, 0, 0); vStroke.Thickness = 2; vStroke.Parent = CrossV
+    local adornee = nil
+    local offset = Vector3.new(0, 3, 0)
 
-local isDragging = false
-local dragStart, startPos
-CrossHandle.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
-        isDragging = true
-        dragStart = input.Position
-        startPos = CrossHandle.Position
+    if instance:IsA("BasePart") then
+        adornee = instance
+        offset = Vector3.new(0, instance.Size.Y / 2 + 1.5, 0)
+    elseif instance:IsA("Model") then
+        local primary = instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart")
+        if not primary then return end
+        adornee = primary
+        offset = Vector3.new(0, primary.Size.Y / 2 + 1.5, 0)
     end
-end)
-CrossHandle.InputChanged:Connect(function(input)
-    if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-       or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        CrossHandle.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y
-        )
-    end
-end)
-CrossHandle.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
-        isDragging = false
-    end
-end)
 
-local CrossPanel = Instance.new("Frame")
-CrossPanel.Size = UDim2.new(0, 320, 0, 110)
-CrossPanel.Position = UDim2.new(0.5, -160, 1, -130)
-CrossPanel.BackgroundColor3 = Theme.Bg
-CrossPanel.BackgroundTransparency = 0.05
-CrossPanel.BorderSizePixel = 0
-CrossPanel.Active = true
-CrossPanel.ZIndex = 50
-CrossPanel.Parent = CrosshairGui
-addCorner(CrossPanel, 12)
-addStroke(CrossPanel, Theme.Accent, 2)
-makeDraggable(CrossPanel)
-
-local CrossTitleLbl = Instance.new("TextLabel")
-CrossTitleLbl.Text = "🎯 ПРИЦЕЛ"
-CrossTitleLbl.Size = UDim2.new(1, -20, 0, 26)
-CrossTitleLbl.Position = UDim2.new(0, 10, 0, 6)
-CrossTitleLbl.BackgroundTransparency = 1
-CrossTitleLbl.TextColor3 = Theme.Text
-CrossTitleLbl.Font = Enum.Font.GothamBold
-CrossTitleLbl.TextSize = 13
-CrossTitleLbl.TextXAlignment = Enum.TextXAlignment.Center
-CrossTitleLbl.Parent = CrossPanel
-
-local CoordLabel = Instance.new("TextLabel")
-CoordLabel.Size = UDim2.new(1, -20, 0, 22)
-CoordLabel.Position = UDim2.new(0, 10, 0, 34)
-CoordLabel.BackgroundTransparency = 1
-CoordLabel.Text = "X: —   Y: —"
-CoordLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-CoordLabel.Font = Enum.Font.Code
-CoordLabel.TextSize = 14
-CoordLabel.Parent = CrossPanel
-
-local SelectBtn = Instance.new("TextButton")
-SelectBtn.Text = "Выбрать (текущие координаты)"
-SelectBtn.Size = UDim2.new(1, -20, 0, 36)
-SelectBtn.Position = UDim2.new(0, 10, 1, -44)
-SelectBtn.BackgroundColor3 = Theme.Accent
-SelectBtn.TextColor3 = Theme.Text
-SelectBtn.Font = Enum.Font.GothamBold
-SelectBtn.TextSize = 13
-SelectBtn.BorderSizePixel = 0
-SelectBtn.AutoButtonColor = false
-SelectBtn.Parent = CrossPanel
-addCorner(SelectBtn, 8)
-
-SelectBtn.MouseButton1Click:Connect(function()
-    if not currentPickKey then return end
-    local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
-    local x, y = math.floor(pos.X), math.floor(pos.Y)
-    Settings.Buttons[currentPickKey] = {Pos = {X = x, Y = y}}
-    log(string.format("✓ %s: X=%d, Y=%d", currentPickName, x, y), Theme.Success)
-    if getgenv().refreshButtonLabels then getgenv().refreshButtonLabels() end
-    CrosshairGui.Enabled = false
-    MainGui.Enabled = true
-    currentPickKey = nil
-    currentPickName = nil
-end)
-
-local currentPickKey = nil
-local currentPickName = nil
-
-function openCrosshairPicker(key, displayName)
-    currentPickKey = key
-    currentPickName = displayName
-    CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — " .. displayName
-    CrosshairGui.Enabled = true
-    MainGui.Enabled = false
-    CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
-    log("🎯 Перетащи крест и жми «Выбрать»", Theme.Warning)
-end
-
-RunService.RenderStepped:Connect(function()
-    if not CrosshairGui.Enabled then return end
-    local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
-    CoordLabel.Text = string.format("X: %d   Y: %d", pos.X, pos.Y)
-end)
-
--- Заполнение кнопок координат
-makeButtonSetter("Активировать", "Activate")
-makeButtonSetter("Выдать билет", "GiveTicket")
-makeButtonSetter("Проверить оружие", "CheckWeapon")
-makeButtonSetter("Деактивировать", "Deactivate")
-makeButtonSetter("Увеличение номера", "IncreaseNumber")
-
--- ═══════════════════════════════════════════════════════
--- 🎨 ESP
--- ═══════════════════════════════════════════════════════
-local function createESP(player)
-    if player == LocalPlayer then return end
-    local esp = {}
+    if not adornee then return end
 
     local billboard = Instance.new("BillboardGui")
-    billboard.Name = "ESP_Billboard"
+    billboard.Name = "EMarker"
+    billboard.Size = UDim2.new(0, 40, 0, 40)
+    billboard.StudsOffset = offset
     billboard.AlwaysOnTop = true
-    billboard.Size = UDim2.new(0, 200, 0, 70)
-    billboard.StudsOffset = Vector3.new(0, Settings.HeadOffset + 2, 0)
-    billboard.Enabled = false
-    billboard.Parent = MainGui
+    billboard.MaxDistance = 200
+    billboard.Adornee = adornee
+    billboard.Parent = EMarkersGui
 
-    local statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, 0, 0, 22)
-    statusLabel.BackgroundTransparency = 1
-    statusLabel.Font = Enum.Font.GothamBold
-    statusLabel.TextSize = 16
-    statusLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
-    statusLabel.TextStrokeTransparency = 0
-    statusLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    statusLabel.Visible = false
-    statusLabel.Parent = billboard
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    bg.BackgroundTransparency = 0.2
+    bg.BorderSizePixel = 0
+    bg.Parent = billboard
+    addCorner(bg, 20)
+    addStroke(bg, Colors.EColor, 2)
 
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(1, 0, 0, 22)
-    nameLabel.Position = UDim2.new(0, 0, 0, 22)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextSize = Settings.TextSize
-    nameLabel.TextColor3 = Settings.NameColor
-    nameLabel.TextStrokeTransparency = 0
-    nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    nameLabel.Parent = billboard
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "E"
+    lbl.TextColor3 = Colors.EColor
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 20
+    lbl.TextStrokeTransparency = 0
+    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lbl.Parent = billboard
 
-    local distLabel = Instance.new("TextLabel")
-    distLabel.Size = UDim2.new(1, 0, 0, 20)
-    distLabel.Position = UDim2.new(0, 0, 0, 44)
-    distLabel.BackgroundTransparency = 1
-    distLabel.Font = Enum.Font.Gotham
-    distLabel.TextSize = Settings.TextSize - 2
-    distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    distLabel.TextStrokeTransparency = 0
-    distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    distLabel.Parent = billboard
+    local clickBtn = Instance.new("TextButton")
+    clickBtn.Size = UDim2.new(1, 0, 1, 0)
+    clickBtn.BackgroundTransparency = 1
+    clickBtn.Text = ""
+    clickBtn.Parent = billboard
 
-    local healthBg = Instance.new("Frame")
-    healthBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    healthBg.BorderSizePixel = 0
-    healthBg.Size = UDim2.new(0, 4, 1, 0)
-    healthBg.Position = UDim2.new(-0.05, 0, 0, 0)
-    healthBg.Parent = billboard
+    clickBtn.MouseButton1Click:Connect(function()
+        guiLog("📌 E-клик по: " .. instance.ClassName .. " [" .. instance.Name .. "]", Colors.EColor)
+        showObject(instance)
+        selectTab(1)
+    end)
 
-    local healthFill = Instance.new("Frame")
-    healthFill.BackgroundColor3 = Settings.HealthColor
-    healthFill.BorderSizePixel = 0
-    healthFill.Size = UDim2.new(1, 0, 1, 0)
-    healthFill.AnchorPoint = Vector2.new(0, 1)
-    healthFill.Position = UDim2.new(0, 0, 1, 0)
-    healthFill.Parent = healthBg
-
-    esp.Billboard = billboard
-    esp.StatusLabel = statusLabel
-    esp.NameLabel = nameLabel
-    esp.DistLabel = distLabel
-    esp.HealthBg = healthBg
-    esp.HealthFill = healthFill
-    esp.StatusText = ""
-
-    ESPCache[player] = esp
+    EMarkers[instance] = {Gui = billboard, Adornee = adornee}
 end
 
-local function removeESP(player)
-    local esp = ESPCache[player]
-    if not esp then return end
-    if esp.Billboard then esp.Billboard:Destroy() end
-    ESPCache[player] = nil
+local function clearAllEMarkers()
+    for instance, marker in pairs(EMarkers) do
+        pcall(function() marker.Gui:Destroy() end)
+    end
+    EMarkers = {}
 end
 
-local function setPlayerStatus(player, text, color)
-    local esp = ESPCache[player]
-    if not esp or not esp.StatusLabel then return end
-    esp.StatusText = text or ""
-    esp.StatusLabel.Text = text or ""
-    esp.StatusLabel.TextColor3 = color or Color3.fromRGB(255, 220, 80)
-end
-
-local function clearPlayerStatus(player)
-    setPlayerStatus(player, "", nil)
-end
-
--- ═══════════════════════════════════════════════════════
--- 🔄 ОСНОВНОЙ ЦИКЛ ESP + АВТОДЕЙСТВИЯ
--- ═══════════════════════════════════════════════════════
-RunService.RenderStepped:Connect(function(dt)
-    -- ESP
-    if Settings.Enabled then
-        for player, esp in pairs(ESPCache) do
-            local char = player.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local head = char and char:FindFirstChild("Head")
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if not hrp or not head or not hum or hum.Health <= 0 then
-                esp.Billboard.Enabled = false
-            elseif Settings.TeamCheck and player.Team == LocalPlayer.Team then
-                esp.Billboard.Enabled = false
-            else
-                local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                if d > Settings.MaxDistance then
-                    esp.Billboard.Enabled = false
-                else
-                    esp.Billboard.Adornee = head
-                    esp.Billboard.Enabled = true
-                    esp.NameLabel.Text = player.Name
-                    esp.NameLabel.Visible = Settings.ShowName
-                    esp.DistLabel.Text = string.format("[%d m]", d)
-                    esp.DistLabel.Visible = Settings.ShowDistance
-                    esp.StatusLabel.Visible = Settings.ShowStatus and (esp.StatusText ~= "")
-                    local hp = hum.Health / hum.MaxHealth
-                    esp.HealthFill.Size = UDim2.new(1, 0, hp, 0)
-                    esp.HealthFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hp), 255 * hp, 0)
-                    esp.HealthBg.Visible = Settings.ShowHealth
+local function eToAll()
+    clearAllEMarkers()
+    local count = 0
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if count >= MaxEMarkers then break end
+        if obj:IsA("BasePart") and not obj:IsDescendantOf(LocalPlayer.Character) then
+            local isCharPart = false
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr.Character and obj:IsDescendantOf(plr.Character) then
+                    isCharPart = true
+                    break
                 end
             end
+            if not isCharPart and obj.Name ~= "Terrain" and obj.Size.Magnitude > 1 then
+                createEMarker(obj)
+                count = count + 1
+            end
         end
+    end
+    guiLog("📌 E to all: " .. count .. " маркеров", Colors.EColor)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🖱️ E-МАРКЕРЫ ДЛЯ КНОПОК GUI
+-- ═══════════════════════════════════════════════════════
+local ButtonMarkers = {}     -- {[button] = {Gui, ScreenPos}}
+
+-- Простой маркер кнопки — рисуется прямо над кнопкой (без 3D)
+local function createButtonMarker(button)
+    if ButtonMarkers[button] then return end
+    if not button or not button:IsA("GuiButton") then return end
+    if not button.Visible then return end
+
+    -- Проверяем что кнопка реально на экране
+    local absPos = button.AbsolutePosition
+    local absSize = button.AbsoluteSize
+    if absPos.X < -1000 or absPos.Y < -1000 then return end
+
+    -- Рамка вокруг кнопки
+    local outline = Instance.new("Frame")
+    outline.Name = "EMarker_Button"
+    outline.Size = UDim2.new(0, absSize.X + 6, 0, absSize.Y + 6)
+    outline.Position = UDim2.new(0, absPos.X - 3, 0, absPos.Y - 3)
+    outline.BackgroundTransparency = 1
+    outline.BorderSizePixel = 0
+    outline.ZIndex = 9998
+    outline.Parent = EMarkersGui
+    addStroke(outline, Colors.ButtonCol, 2)
+
+    -- Кружок E
+    local badge = Instance.new("Frame")
+    badge.Size = UDim2.new(0, 22, 0, 22)
+    badge.Position = UDim2.new(1, -11, 0, -11)
+    badge.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    badge.BorderSizePixel = 0
+    badge.ZIndex = 9999
+    badge.Parent = outline
+    addCorner(badge, 11)
+    addStroke(badge, Colors.ButtonCol, 2)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "E"
+    lbl.TextColor3 = Colors.ButtonCol
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.ZIndex = 10000
+    lbl.Parent = badge
+
+    -- Кнопка-перехватчик
+    local clickBtn = Instance.new("TextButton")
+    clickBtn.Size = UDim2.new(1, 0, 1, 0)
+    clickBtn.BackgroundTransparency = 1
+    clickBtn.Text = ""
+    clickBtn.ZIndex = 10001
+    clickBtn.Parent = outline
+
+    clickBtn.MouseButton1Click:Connect(function()
+        guiLog("🖱 E-click по кнопке: " .. button.Name, Colors.ButtonCol)
+        showObject(button)
+        selectTab(1)
+    end)
+
+    ButtonMarkers[button] = {Gui = outline, Button = button}
+end
+
+local function clearAllButtonMarkers()
+    for btn, marker in pairs(ButtonMarkers) do
+        pcall(function() marker.Gui:Destroy() end)
+    end
+    ButtonMarkers = {}
+end
+
+-- Обновление позиций маркеров кнопок (если они двигаются)
+RunService.RenderStepped:Connect(function()
+    if next(ButtonMarkers) == nil then return end
+    for btn, marker in pairs(ButtonMarkers) do
+        if not btn.Parent or not btn.Visible then
+            pcall(function() marker.Gui:Destroy() end)
+            ButtonMarkers[btn] = nil
+        else
+            local absPos = btn.AbsolutePosition
+            local absSize = btn.AbsoluteSize
+            marker.Gui.Position = UDim2.new(0, absPos.X - 3, 0, absPos.Y - 3)
+            marker.Gui.Size = UDim2.new(0, absSize.X + 6, 0, absSize.Y + 6)
+        end
+    end
+end)
+
+local function eToButtons()
+    clearAllButtonMarkers()
+    local count = 0
+
+    -- Ищем все GuiButton в PlayerGui
+    pcall(function()
+        for _, desc in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
+            if desc:IsA("GuiButton") and desc.Visible and desc.Active and desc.AbsoluteSize.Magnitude > 5 then
+                createButtonMarker(desc)
+                count = count + 1
+            end
+        end
+    end)
+
+    -- И в CoreGui
+    pcall(function()
+        for _, desc in ipairs(CoreGui:GetDescendants()) do
+            if desc:IsA("GuiButton") and desc.Visible and desc.Active and desc.AbsoluteSize.Magnitude > 5 then
+                createButtonMarker(desc)
+                count = count + 1
+            end
+        end
+    end)
+
+    guiLog("🖱 E to buttons: " .. count .. " маркеров над кнопками", Colors.ButtonCol)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🖱️ ЛОГИКА ВЫБОРА
+-- ═══════════════════════════════════════════════════════
+local SelectMode = true
+local CurrentObject = nil
+local CurrentButtonInfo = nil
+local AllProps = {}
+local AllChildren = {}
+
+local function clearList(list)
+    for _, child in pairs(list:GetChildren()) do
+        if child:IsA("Frame") or child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+end
+
+local function addPropRow(parent, propName, propValue, isSection, valueColor)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -8, 0, isSection and 22 or 44)
+    row.BackgroundColor3 = isSection and Colors.Bg or Colors.BgLighter
+    row.BackgroundTransparency = isSection and 1 or 0.3
+    row.BorderSizePixel = 0
+    row.Parent = parent
+    addCorner(row, 6)
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Text = propName
+    nameLbl.Size = UDim2.new(0.4, -8, 1, 0)
+    nameLbl.Position = UDim2.new(0, 8, 0, 0)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.TextColor3 = isSection and Colors.Accent or Colors.Text
+    nameLbl.Font = Enum.Font.GothamBold
+    nameLbl.TextSize = isSection and 12 or 11
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    nameLbl.Parent = row
+
+    if not isSection then
+        local valLbl = Instance.new("TextLabel")
+        valLbl.Text = propValue
+        valLbl.Size = UDim2.new(0.6, -8, 1, 0)
+        valLbl.Position = UDim2.new(0.4, 0, 0, 0)
+        valLbl.BackgroundTransparency = 1
+        valLbl.TextColor3 = valueColor or Colors.Success
+        valLbl.Font = Enum.Font.Code
+        valLbl.TextSize = 10
+        valLbl.TextXAlignment = Enum.TextXAlignment.Left
+        valLbl.TextYAlignment = Enum.TextYAlignment.Center
+        valLbl.TextWrapped = true
+        valLbl.Parent = row
+    end
+
+    return row
+end
+
+function showObject(obj)
+    CurrentObject = obj
+    SelectionBox.Adornee = obj
+    SelectionBox.Visible = true
+
+    StatusText.Text = obj.ClassName .. "  ▸  " .. obj.Name
+    StatusText.TextColor3 = Colors.Success
+
+    if obj:IsA("BasePart") then
+        local p = obj.Position
+        StatusPos.Text = string.format("📍 (%.2f, %.2f, %.2f)  Size: (%.1f, %.1f, %.1f)",
+            p.X, p.Y, p.Z, obj.Size.X, obj.Size.Y, obj.Size.Z)
+    elseif obj:IsA("GuiObject") then
+        local ap = obj.AbsolutePosition
+        local as = obj.AbsoluteSize
+        StatusPos.Text = string.format("📱 Экран: (%.0f, %.0f)  Size: (%.0f, %.0f)",
+            ap.X, ap.Y, as.X, as.Y)
+    elseif obj:IsA("Model") then
+        local pivot = obj:GetPivot().Position
+        StatusPos.Text = string.format("📍 Pivot: (%.2f, %.2f, %.2f)", pivot.X, pivot.Y, pivot.Z)
     else
-        for _, esp in pairs(ESPCache) do
-            if esp.Billboard then esp.Billboard.Enabled = false end
+        StatusPos.Text = ""
+    end
+
+    guiLog("📦 Выбран: " .. obj.ClassName .. " [" .. obj.Name .. "]", Colors.Success)
+
+    -- Если это GUI-кнопка — показываем спец-панель
+    local btnInfo = analyzeButton(obj)
+    CurrentButtonInfo = btnInfo
+
+    if btnInfo then
+        ButtonPanel.Visible = true
+
+        local mainPath = btnInfo.PlayerGuiPath or btnInfo.CoreGuiPath or btnInfo.FullPath
+        local prefix = btnInfo.PlayerGuiPath and "PlayerGui." or (btnInfo.CoreGuiPath and "CoreGui." or "")
+        BP_Path.Text = "📍 " .. prefix .. mainPath
+
+        BP_Info.Text = string.format("👁 %s  |  🎯 %s  |  🖱 %s  |  📐 %dx%d",
+            btnInfo.Visible and "видна" or "СКРЫТА",
+            btnInfo.Active and "активна" or "НЕАКТИВНА",
+            btnInfo.Interactable and "кликабельна" or "некликабельна",
+            btnInfo.Size.X, btnInfo.Size.Y
+        )
+
+        BP_Path.TextColor3 = btnInfo.Visible and Colors.CodeCol or Colors.Danger
+
+        guiLog("🖱 КНОПКА НАЙДЕНА!", Colors.ButtonCol)
+        guiLog("   Путь: " .. prefix .. mainPath, Colors.CodeCol)
+        guiLog("   Visible=" .. tostring(btnInfo.Visible) 
+            .. " Active=" .. tostring(btnInfo.Active)
+            .. " Interactable=" .. tostring(btnInfo.Interactable), Colors.LogText)
+
+        TabSwitch.Position = UDim2.new(0, 0, 0, 216)
+        SearchBox.Position = UDim2.new(0, 0, 0, 252)
+        PropsList.Position = UDim2.new(0, 0, 0, 286)
+        ChildrenList.Position = UDim2.new(0, 0, 0, 286)
+    else
+        ButtonPanel.Visible = false
+        TabSwitch.Position = UDim2.new(0, 0, 0, 108)
+        SearchBox.Position = UDim2.new(0, 0, 0, 144)
+        PropsList.Position = UDim2.new(0, 0, 0, 178)
+        ChildrenList.Position = UDim2.new(0, 0, 0, 178)
+    end
+
+    -- Свойства
+    clearList(PropsList)
+    AllProps = {}
+
+    addPropRow(PropsList, "🆔 ОСНОВНЫЕ", "", true)
+    addPropRow(PropsList, "Name", obj.Name, false)
+    addPropRow(PropsList, "ClassName", obj.ClassName, false)
+    addPropRow(PropsList, "FullName", obj:GetFullName(), false)
+    addPropRow(PropsList, "Parent", obj.Parent and (obj.Parent.ClassName .. " [" .. obj.Parent.Name .. "]") or "nil", false)
+
+    table.insert(AllProps, {Name = "Name", Value = obj.Name})
+    table.insert(AllProps, {Name = "ClassName", Value = obj.ClassName})
+    table.insert(AllProps, {Name = "FullName", Value = obj:GetFullName()})
+
+    -- Спец-секция для кнопок
+    if btnInfo then
+        addPropRow(PropsList, "🖱 ИНФО О КНОПКЕ", "", true)
+
+        if btnInfo.PlayerGuiPath then
+            addPropRow(PropsList, "PlayerGuiPath", btnInfo.PlayerGuiPath, false, Colors.CodeCol)
         end
+        if btnInfo.CoreGuiPath then
+            addPropRow(PropsList, "CoreGuiPath", btnInfo.CoreGuiPath, false, Colors.CodeCol)
+        end
+
+        addPropRow(PropsList, "Visible", tostring(btnInfo.Visible), false,
+            btnInfo.Visible and Colors.Success or Colors.Danger)
+        addPropRow(PropsList, "Active", tostring(btnInfo.Active), false,
+            btnInfo.Active and Colors.Success or Colors.Danger)
+        addPropRow(PropsList, "Interactable", tostring(btnInfo.Interactable), false,
+            btnInfo.Interactable and Colors.Success or Colors.Danger)
+        addPropRow(PropsList, "AutoButtonColor", tostring(btnInfo.AutoButtonColor), false)
+        addPropRow(PropsList, "ZIndex", tostring(btnInfo.ZIndex), false)
+        addPropRow(PropsList, "ScreenGui", tostring(btnInfo.ScreenGui), false)
+        addPropRow(PropsList, "ScreenGui.Enabled", tostring(btnInfo.ScreenGuiEnabled), false,
+            btnInfo.ScreenGuiEnabled and Colors.Success or Colors.Danger)
+
+        -- Сигналы
+        addPropRow(PropsList, "⚡ ДОСТУПНЫЕ СИГНАЛЫ", "", true)
+        for _, sig in ipairs(btnInfo.Signals) do
+            addPropRow(PropsList, sig, "доступен", false, Colors.CodeCol)
+        end
+
+        -- Готовый код вызова
+        addPropRow(PropsList, "💻 КОД ДЛЯ ВЫЗОВА", "", true)
+
+        local mainPath = btnInfo.PlayerGuiPath or btnInfo.CoreGuiPath or obj.Name
+        local basePath = btnInfo.PlayerGuiPath and "game.Players.LocalPlayer.PlayerGui." 
+            or (btnInfo.CoreGuiPath and "game:GetService('CoreGui')." or "game.")
+        local fullCode = basePath .. mainPath
+
+        addPropRow(PropsList, "Путь в Lua", fullCode, false, Colors.CodeCol)
+        addPropRow(PropsList, "Вызов 1", fullCode .. ":Activated()", false, Colors.CodeCol)
+        addPropRow(PropsList, "Вызов 2", fullCode .. ".MouseButton1Click:Fire()", false, Colors.CodeCol)
     end
 
-    -- Автодействия
-    if not Settings.AutoActions then return end
-    StateTimer = StateTimer + dt
-
-    local now = tick()
-    for p, expireAt in pairs(IgnoredPlayers) do
-        if now >= expireAt then IgnoredPlayers[p] = nil end
+    if obj:IsA("BasePart") then
+        addPropRow(PropsList, "📍 ПОЗИЦИЯ", "", true)
+        local posStr = string.format("Vector3(%.3f, %.3f, %.3f)", obj.Position.X, obj.Position.Y, obj.Position.Z)
+        local cfStr = string.format("CFrame(%.3f, %.3f, %.3f)", obj.CFrame.Position.X, obj.CFrame.Position.Y, obj.CFrame.Position.Z)
+        local sizeStr = string.format("Vector3(%.2f, %.2f, %.2f)", obj.Size.X, obj.Size.Y, obj.Size.Z)
+        addPropRow(PropsList, "Position", posStr, false)
+        addPropRow(PropsList, "CFrame", cfStr, false)
+        addPropRow(PropsList, "Size", sizeStr, false)
+        table.insert(AllProps, {Name = "Position", Value = posStr})
+        table.insert(AllProps, {Name = "Size", Value = sizeStr})
     end
 
-    if ActionState == "idle" then
-        for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character and not ProcessedPlayers[p] and not IgnoredPlayers[p] then
-                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                    if d <= Settings.TriggerRadius then
-                        local inQueue = false
-                        for _, qp in ipairs(Queue) do
-                            if qp == p then inQueue = true; break end
-                        end
-                        if not inQueue then
-                            table.insert(Queue, p)
-                            log("📋 В очередь: " .. p.Name, Theme.Warning)
-                        end
-                    end
+    if obj:IsA("Model") then
+        addPropRow(PropsList, "📍 МОДЕЛЬ", "", true)
+        local pivot = obj:GetPivot()
+        local pivotStr = string.format("Vector3(%.3f, %.3f, %.3f)", pivot.Position.X, pivot.Position.Y, pivot.Position.Z)
+        addPropRow(PropsList, "Pivot", pivotStr, false)
+        table.insert(AllProps, {Name = "Pivot", Value = pivotStr})
+    end
+
+    addPropRow(PropsList, "⚙ ВСЕ СВОЙСТВА", "", true)
+
+    local success, err = pcall(function()
+        for _, prop in ipairs(obj:GetProperties()) do
+            if prop ~= "Parent" and prop ~= "Name" and prop ~= "ClassName" then
+                local ok, value = pcall(function() return obj[prop] end)
+                if ok and value ~= nil then
+                    local valStr = formatValue(value)
+                    addPropRow(PropsList, prop, valStr, false)
+                    table.insert(AllProps, {Name = prop, Value = valStr})
                 end
             end
         end
-        if #Queue > 0 and StateTimer >= Settings.QueueDelay then
-            local p = table.remove(Queue, 1)
-            if p and p.Character and p.Parent then
-                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    CurrentTarget = p
-                    InitialDistance = (Camera.CFrame.Position - hrp.Position).Magnitude
-                    ActionState = "activating"
-                    StateTimer = 0
-                    ProcessedPlayers[p] = true
-                    log("👤 Обработка: " .. p.Name, Theme.Warning)
-                    setPlayerStatus(p, "АКТИВАЦИЯ...", Color3.fromRGB(255, 220, 80))
-                    if Settings.DoActivate and Settings.Buttons.Activate then
-                        fireButtonAction(Settings.Buttons.Activate)
-                    end
-                end
+    end)
+
+    -- Дети
+    clearList(ChildrenList)
+    AllChildren = {}
+    for _, child in ipairs(obj:GetChildren()) do
+        table.insert(AllChildren, child)
+    end
+
+    if #AllChildren == 0 then
+        local emptyRow = Instance.new("Frame")
+        emptyRow.Size = UDim2.new(1, -8, 0, 30)
+        emptyRow.BackgroundTransparency = 1
+        emptyRow.Parent = ChildrenList
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, 0, 1, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = "Детей нет"
+        lbl.TextColor3 = Colors.TextDim
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 12
+        lbl.Parent = emptyRow
+    else
+        for i, child in ipairs(AllChildren) do
+            local row = addPropRow(ChildrenList, child.Name, child.ClassName, false)
+            local clickBtn = Instance.new("TextButton")
+            clickBtn.Size = UDim2.new(1, 0, 1, 0)
+            clickBtn.BackgroundTransparency = 1
+            clickBtn.Text = ""
+            clickBtn.Parent = row
+            clickBtn.MouseButton1Click:Connect(function()
+                showObject(child)
+            end)
+        end
+    end
+
+    TabSwitch.Visible = true
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🎛️ КНОПКИ
+-- ═══════════════════════════════════════════════════════
+SelectModeBtn.MouseButton1Click:Connect(function()
+    SelectMode = not SelectMode
+    if SelectMode then
+        SelectModeBtn.Text = "🎯 ВЫБОР: ВКЛ"
+        SelectModeBtn.BackgroundColor3 = Colors.Success
+        guiLog("🎯 Режим выбора ВКЛ", Colors.Success)
+    else
+        SelectModeBtn.Text = "🎯 ВЫБОР: ВЫКЛ"
+        SelectModeBtn.BackgroundColor3 = Colors.Danger
+        guiLog("🎯 Режим выбора ВЫКЛ", Colors.Danger)
+    end
+end)
+
+EToAllBtn.MouseButton1Click:Connect(function()
+    EMarkersEnabled = not EMarkersEnabled
+    if EMarkersEnabled then
+        EToAllBtn.Text = "📌 E: ВКЛ"
+        EToAllBtn.BackgroundColor3 = Colors.Success
+        eToAll()
+    else
+        EToAllBtn.Text = "📌 E to all"
+        EToAllBtn.BackgroundColor3 = Colors.Warning
+        clearAllEMarkers()
+        guiLog("📌 E-маркеры удалены", Colors.Warning)
+    end
+end)
+
+EToButtonsBtn.MouseButton1Click:Connect(function()
+    if next(ButtonMarkers) ~= nil then
+        clearAllButtonMarkers()
+        guiLog("🖱 Маркеры кнопок удалены", Colors.Warning)
+    else
+        eToButtons()
+    end
+end)
+
+CopyBtn.MouseButton1Click:Connect(function()
+    if not CurrentObject then
+        guiLog("⚠ Сначала выбери объект", Colors.Danger)
+        return
+    end
+    guiLog("════════════════════════════", Colors.TextDim)
+    guiLog("📦 " .. CurrentObject:GetFullName(), Colors.Success)
+    guiLog("════════════════════════════", Colors.TextDim)
+
+    if CurrentButtonInfo then
+        guiLog("🖱 КНОПКА!", Colors.ButtonCol)
+        if CurrentButtonInfo.PlayerGuiPath then
+            guiLog("   PlayerGui: " .. CurrentButtonInfo.PlayerGuiPath, Colors.CodeCol)
+        end
+        if CurrentButtonInfo.CoreGuiPath then
+            guiLog("   CoreGui: " .. CurrentButtonInfo.CoreGuiPath, Colors.CodeCol)
+        end
+        guiLog("   Visible=" .. tostring(CurrentButtonInfo.Visible), Colors.LogText)
+        guiLog("   Active=" .. tostring(CurrentButtonInfo.Active), Colors.LogText)
+        guiLog("   Interactable=" .. tostring(CurrentButtonInfo.Interactable), Colors.LogText)
+        guiLog("════════════════════════════", Colors.TextDim)
+    end
+
+    for _, p in ipairs(AllProps) do
+        guiLog(string.format("%s = %s", p.Name, p.Value), Colors.LogText)
+    end
+end)
+
+PropsTabBtn.MouseButton1Click:Connect(function()
+    PropsList.Visible = true
+    ChildrenList.Visible = false
+    PropsTabBtn.BackgroundColor3 = Colors.Accent
+    ChildrenTabBtn.BackgroundColor3 = Colors.BgLighter
+end)
+
+ChildrenTabBtn.MouseButton1Click:Connect(function()
+    PropsList.Visible = false
+    ChildrenList.Visible = true
+    PropsTabBtn.BackgroundColor3 = Colors.BgLighter
+    ChildrenTabBtn.BackgroundColor3 = Colors.Accent
+end)
+
+ClearConsoleBtn.MouseButton1Click:Connect(function()
+    clearList(ConsoleList)
+    LogCount = 0
+    guiLog("🗑 Консоль очищена", Colors.Warning)
+end)
+
+-- 🆕 Кнопка копирования кода вызова
+BP_CopyCodeBtn.MouseButton1Click:Connect(function()
+    if not CurrentButtonInfo then
+        guiLog("⚠ Сначала выбери кнопку", Colors.Danger)
+        return
+    end
+
+    local mainPath = CurrentButtonInfo.PlayerGuiPath or CurrentButtonInfo.CoreGuiPath
+    local base = CurrentButtonInfo.PlayerGuiPath and "game.Players.LocalPlayer.PlayerGui." 
+        or "game:GetService('CoreGui')."
+
+    local fullPath = base .. mainPath
+
+    guiLog("════════════════════════════", Colors.TextDim)
+    guiLog("💻 КОД ДЛЯ ВЫЗОВА КНОПКИ:", Colors.CodeCol)
+    guiLog("════════════════════════════", Colors.TextDim)
+    guiLog("local btn = " .. fullPath, Colors.CodeCol)
+    guiLog("btn.Activated:Fire()", Colors.CodeCol)
+    guiLog("-- или", Colors.TextDim)
+    guiLog("btn.MouseButton1Click:Fire()", Colors.CodeCol)
+    guiLog("-- или", Colors.TextDim)
+    guiLog("btn:Activate()", Colors.CodeCol)
+    guiLog("════════════════════════════", Colors.TextDim)
+    guiLog("✅ Скопировано в консоль", Colors.Success)
+
+    -- Переключаемся на консоль
+    selectTab(2)
+end)
+
+-- 🆕 Кнопка проверки клика
+BP_TestClickBtn.MouseButton1Click:Connect(function()
+    if not CurrentObject or not CurrentObject:IsA("GuiButton") then
+        guiLog("⚠ Выбранный объект не кнопка", Colors.Danger)
+        return
+    end
+
+    guiLog("🧪 Тест клика по: " .. CurrentObject.Name, Colors.Warning)
+
+    local ok, results = testClickButton(CurrentObject)
+    if ok then
+        for line in results:gmatch("[^\n]+") do
+            guiLog("   " .. line, Colors.LogText)
+        end
+        guiLog("✅ Тест завершён — смотри что в игре произошло", Colors.Success)
+    else
+        guiLog("❌ Ошибка: " .. tostring(results), Colors.Danger)
+    end
+end)
+
+-- Поиск
+SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local query = SearchBox.Text:lower()
+    for _, row in ipairs(PropsList:GetChildren()) do
+        if row:IsA("Frame") then
+            local nameLbl = row:FindFirstChildOfClass("TextLabel")
+            if nameLbl then
+                local match = query == "" or nameLbl.Text:lower():find(query, 1, true)
+                row.Visible = match
             end
-        elseif #Queue == 0 then
-            StateTimer = 0
         end
-    end
-
-    if ActionState == "activating" and CurrentTarget then
-        setPlayerStatus(CurrentTarget, "АКТИВАЦИЯ " .. math.floor(Settings.WaitAfterActivate - StateTimer) .. "с", Color3.fromRGB(255, 220, 80))
-        if StateTimer >= Settings.WaitAfterActivate then
-            local hrp = CurrentTarget.Character and CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local d = (Camera.CFrame.Position - hrp.Position).Magnitude
-                if d < InitialDistance - Settings.ApproachThreshold then
-                    setPlayerStatus(CurrentTarget, "ВЫДАЧА БИЛЕТА", Color3.fromRGB(80, 200, 255))
-                    if Settings.DoGiveTicket and Settings.Buttons.GiveTicket then
-                        fireButtonAction(Settings.Buttons.GiveTicket)
-                    end
-                    ActionState = "ticket"
-                    StateTimer = 0
-                else
-                    setPlayerStatus(CurrentTarget, "НЕ ПОДОШЁЛ", Color3.fromRGB(200, 100, 100))
-                    ActionState = "waitLeft"
-                    StateTimer = 0
-                end
-            else
-                ActionState = "waitLeft"
-                StateTimer = 0
-            end
-        end
-    end
-
-    if ActionState == "ticket" and StateTimer >= Settings.WaitBeforeCheck then
-        if CurrentTarget then setPlayerStatus(CurrentTarget, "ПРОВЕРКА ОРУЖИЯ", Color3.fromRGB(255, 180, 80)) end
-        if Settings.DoCheckWeapon and Settings.Buttons.CheckWeapon then
-            fireButtonAction(Settings.Buttons.CheckWeapon)
-        end
-        ActionState = "weapon"
-        StateTimer = 0
-    end
-
-    if ActionState == "weapon" and StateTimer >= Settings.WaitBeforeDeactivate then
-        if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ", Color3.fromRGB(200, 130, 255)) end
-        if Settings.DoDeactivate and Settings.Buttons.Deactivate then
-            fireButtonAction(Settings.Buttons.Deactivate)
-        end
-        ActionState = "cooldown"
-        StateTimer = 0
-    end
-
-    if ActionState == "waitLeft" and StateTimer >= Settings.WaitLeftWithoutApproach then
-        if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ (ушёл)", Color3.fromRGB(200, 130, 255)) end
-        if Settings.DoDeactivate and Settings.Buttons.Deactivate then
-            fireButtonAction(Settings.Buttons.Deactivate)
-        end
-        ActionState = "cooldown"
-        StateTimer = 0
-    end
-
-    if ActionState == "cooldown" and StateTimer >= 5 then
-        if CurrentTarget then
-            clearPlayerStatus(CurrentTarget)
-            IgnoredPlayers[CurrentTarget] = tick() + Settings.IgnoreDuration
-            log("🚫 " .. CurrentTarget.Name .. " в игноре", Theme.TextDim)
-        end
-        CurrentTarget = nil
-        ActionState = "idle"
-        StateTimer = 0
     end
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 🎧 СОБЫТИЯ
+-- 🖱️ RAYCAST
 -- ═══════════════════════════════════════════════════════
-Players.PlayerAdded:Connect(createESP)
-Players.PlayerRemoving:Connect(function(player)
-    removeESP(player)
-    ProcessedPlayers[player] = nil
-    IgnoredPlayers[player] = nil
-    for i = #Queue, 1, -1 do
-        if Queue[i] == player then table.remove(Queue, i) end
+local function raycastFromScreen(x, y)
+    local unitRay = Camera:ViewportPointToRay(x, y)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, MainGui, HighlightGui, EMarkersGui}
+    rayParams.IgnoreWater = true
+    local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 5000, rayParams)
+    if result then
+        return result.Instance, result.Position
+    end
+    return nil, nil
+end
+
+local selectConn = UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if not SelectMode then return end
+
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
+        local mousePos = UserInputService:GetMouseLocation()
+        local guiAtPos = LocalPlayer.PlayerGui:GetGuiObjectsAtPosition(mousePos.X, mousePos.Y)
+        for _, obj in pairs(guiAtPos) do
+            if obj:IsDescendantOf(MainGui) or obj:IsDescendantOf(EMarkersGui) then return end
+        end
+
+        -- Сначала пробуем найти GUI-кнопку под курсором
+        local buttonFound = nil
+        for _, obj in pairs(guiAtPos) do
+            if obj:IsA("GuiButton") then
+                buttonFound = obj
+                break
+            end
+        end
+
+        if buttonFound then
+            guiLog("🖱 Клик по GUI-кнопке: " .. buttonFound.Name, Colors.ButtonCol)
+            showObject(buttonFound)
+            return
+        end
+
+        -- Если нет GUI — рейкаст в мир
+        task.wait(0.05)
+        local instance, hitPos = raycastFromScreen(mousePos.X, mousePos.Y)
+        if instance then
+            showObject(instance)
+        end
     end
 end)
-for _, p in pairs(Players:GetPlayers()) do createESP(p) end
 
 -- ═══════════════════════════════════════════════════════
--- 🔄 ВКЛАДКИ
+-- 📑 ВКЛАДКИ
 -- ═══════════════════════════════════════════════════════
-local tabs = {
+local Tabs = {
+    {Name = "Инспектор", Frame = InspectorTab},
     {Name = "Консоль", Frame = ConsoleTab},
-    {Name = "Тест", Frame = TestTab},
-    {Name = "Настройки", Frame = SettingsTab},
 }
 
-local function selectTab(index)
-    for i, tab in ipairs(tabs) do
+function selectTab(index)
+    for i, tab in ipairs(Tabs) do
         tab.Frame.Visible = (i == index)
         if tab.Button then
             TweenService:Create(tab.Button, TweenInfo.new(0.15), {
-                BackgroundColor3 = (i == index) and Theme.Accent or Theme.BgLighter
+                BackgroundColor3 = (i == index) and Colors.Accent or Colors.BgLighter
             }):Play()
         end
     end
 end
 
-for i, tab in ipairs(tabs) do
+for i, tab in ipairs(Tabs) do
     local btn = Instance.new("TextButton")
     btn.Text = tab.Name
-    btn.Size = UDim2.new(1/#tabs, -4, 1, 0)
-    btn.Position = UDim2.new((i-1)/#tabs, 2, 0, 0)
-    btn.BackgroundColor3 = Theme.BgLighter
-    btn.TextColor3 = Theme.Text
+    btn.Size = UDim2.new(1/#Tabs, -4, 1, 0)
+    btn.Position = UDim2.new((i-1)/#Tabs, 2, 0, 0)
+    btn.BackgroundColor3 = Colors.BgLighter
+    btn.TextColor3 = Colors.Text
     btn.Font = Enum.Font.GothamBold
     btn.TextSize = 13
     btn.BorderSizePixel = 0
@@ -1497,51 +1442,62 @@ for i, tab in ipairs(tabs) do
 end
 selectTab(1)
 
+-- Свернуть / закрыть
 local minimized = false
 local originalSize = MainFrame.Size
-MinimizeBtn.MouseButton1Click:Connect(function()
+MinBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 460, 0, 42)}):Play()
-        ContentFrame.Visible = false
+        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 560, 0, 42)}):Play()
         TabBar.Visible = false
+        ContentFrame.Visible = false
     else
         TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = originalSize}):Play()
-        ContentFrame.Visible = true
         TabBar.Visible = true
+        ContentFrame.Visible = true
     end
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
     MainGui.Enabled = false
-    log("UI скрыт. Вернуть: getgenv().ShowUI()", Theme.Warning)
+    SelectionBox.Visible = false
+    clearAllButtonMarkers()
+    guiLog("🚪 Окно скрыто. Вернуть: getgenv().ObjInf.Show()", Colors.Warning)
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 🌐 ПУБЛИЧНОЕ API
+-- 🌐 API
 -- ═══════════════════════════════════════════════════════
-getgenv().ESP = {
-    Settings = Settings,
-    RouteSettings = RouteSettings,
-    Doors = Doors,
-    Toggle = function() Settings.Enabled = not Settings.Enabled end,
-    GoToRoom = goToRoom,
-    GoToNextRoom = goToNextRoom,
-    FindDoors = findDoors,
-    ClearVisuals = clearVisuals,
+getgenv().ObjInf = {
+    Show = function() MainGui.Enabled = true end,
+    Hide = function() MainGui.Enabled = false end,
     Destroy = function()
-        for p, _ in pairs(ESPCache) do removeESP(p) end
-        clearVisuals()
-        if VisualsFolder then VisualsFolder:Destroy() end
+        if selectConn then selectConn:Disconnect() end
+        clearAllEMarkers()
+        clearAllButtonMarkers()
+        pcall(function() SelectionBox:Destroy() end)
         pcall(function() MainGui:Destroy() end)
-        pcall(function() CrosshairGui:Destroy() end)
-        pcall(function() ClickIndicatorGui:Destroy() end)
-        getgenv().ESP_LOADED = false
+        pcall(function() EMarkersGui:Destroy() end)
+        getgenv().OBJ_INF_LOADED = false
     end,
+    Inspect = showObject,
+    Log = guiLog,
+    EToAll = eToAll,
+    EToButtons = eToButtons,
+    ClearEMarkers = clearAllEMarkers,
+    ClearButtonMarkers = clearAllButtonMarkers,
+    AnalyzeButton = analyzeButton,
+    TestClick = testClickButton,
 }
 
-getgenv().ShowUI = function() MainGui.Enabled = true end
-getgenv().HideUI = function() MainGui.Enabled = false end
+getgenv().InspectPart = function(part)
+    if part and typeof(part) == "Instance" then
+        showObject(part)
+    end
+end
 
-log("✅ Скрипт загружен!", Theme.Success)
-log("Вкладка «Тест» → кнопка «К комнате»", Theme.Warning)
+print("[ObjInf v3.0] ✅ Инспектор загружен!")
+print("[ObjInf v3.0] Клик по объекту → инфа")
+print("[ObjInf v3.0] Клик по GUI-кнопке → путь + код вызова")
+print("[ObjInf v3.0] Кнопки: E to all / E to buttons")
+print("[ObjInf v3.0] Скрыть: getgenv().ObjInf.Hide()")
