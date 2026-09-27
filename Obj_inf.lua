@@ -1,6 +1,6 @@
 --[[
-    obj_inf.lua — Инспектор объектов + GUI-консоль
-    Клик по объекту → показ всех свойств
+    obj_inf.lua — Инспектор объектов + E-маркеры
+    Кнопка "E to all" вешает E-иконки на все объекты
     Для Delta Executor
 --]]
 
@@ -39,6 +39,7 @@ local Colors = {
     Border    = Color3.fromRGB(60, 60, 80),
     Highlight = Color3.fromRGB(0, 255, 150),
     LogText   = Color3.fromRGB(180, 220, 180),
+    EColor    = Color3.fromRGB(255, 220, 80),
 }
 
 -- ═══════════════════════════════════════════════════════
@@ -90,7 +91,7 @@ local function makeDraggable(frame, handle)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📦 ФОРМАТИРОВАНИЕ ЗНАЧЕНИЙ
+-- 📦 ФОРМАТИРОВАНИЕ
 -- ═══════════════════════════════════════════════════════
 local function formatValue(val)
     local t = typeof(val)
@@ -106,7 +107,6 @@ local function formatValue(val)
     elseif t == "EnumItem" then
         return "Enum." .. tostring(val)
     elseif t == "Instance" then
-        if val == nil then return "nil" end
         return val.ClassName .. " [" .. val.Name .. "]"
     elseif t == "table" then
         local count = 0
@@ -167,7 +167,6 @@ TitleLbl.TextSize = 15
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.Parent = TitleBar
 
--- Кнопка свернуть
 local MinBtn = Instance.new("TextButton")
 MinBtn.Text = "—"
 MinBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -180,7 +179,6 @@ MinBtn.BorderSizePixel = 0
 MinBtn.Parent = TitleBar
 addCorner(MinBtn, 6)
 
--- Кнопка закрыть
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Text = "✕"
 CloseBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -193,9 +191,7 @@ CloseBtn.BorderSizePixel = 0
 CloseBtn.Parent = TitleBar
 addCorner(CloseBtn, 6)
 
--- ═══════════════════════════════════════════════════════
--- 📑 ВКЛАДКИ
--- ═══════════════════════════════════════════════════════
+-- Вкладки
 local TabBar = Instance.new("Frame")
 TabBar.Size = UDim2.new(1, -24, 0, 34)
 TabBar.Position = UDim2.new(0, 12, 0, 50)
@@ -272,25 +268,39 @@ BtnBar.BackgroundTransparency = 1
 BtnBar.Parent = InspectorTab
 
 local SelectModeBtn = Instance.new("TextButton")
-SelectModeBtn.Text = "🎯 РЕЖИМ ВЫБОРА: ВКЛ"
-SelectModeBtn.Size = UDim2.new(0.5, -4, 1, 0)
+SelectModeBtn.Text = "🎯 ВЫБОР: ВКЛ"
+SelectModeBtn.Size = UDim2.new(0.33, -3, 1, 0)
+SelectModeBtn.Position = UDim2.new(0, 0, 0, 0)
 SelectModeBtn.BackgroundColor3 = Colors.Success
 SelectModeBtn.TextColor3 = Colors.Text
 SelectModeBtn.Font = Enum.Font.GothamBold
-SelectModeBtn.TextSize = 12
+SelectModeBtn.TextSize = 11
 SelectModeBtn.BorderSizePixel = 0
 SelectModeBtn.AutoButtonColor = false
 SelectModeBtn.Parent = BtnBar
 addCorner(SelectModeBtn, 8)
 
+local EToAllBtn = Instance.new("TextButton")
+EToAllBtn.Text = "📌 E to all"
+EToAllBtn.Size = UDim2.new(0.33, -3, 1, 0)
+EToAllBtn.Position = UDim2.new(0.34, 0, 0, 0)
+EToAllBtn.BackgroundColor3 = Colors.Warning
+EToAllBtn.TextColor3 = Colors.Text
+EToAllBtn.Font = Enum.Font.GothamBold
+EToAllBtn.TextSize = 11
+EToAllBtn.BorderSizePixel = 0
+EToAllBtn.AutoButtonColor = false
+EToAllBtn.Parent = BtnBar
+addCorner(EToAllBtn, 8)
+
 local CopyBtn = Instance.new("TextButton")
 CopyBtn.Text = "📋 В консоль"
-CopyBtn.Size = UDim2.new(0.5, -4, 1, 0)
-CopyBtn.Position = UDim2.new(0.5, 4, 0, 0)
+CopyBtn.Size = UDim2.new(0.33, -3, 1, 0)
+CopyBtn.Position = UDim2.new(0.67, 0, 0, 0)
 CopyBtn.BackgroundColor3 = Colors.Accent
 CopyBtn.TextColor3 = Colors.Text
 CopyBtn.Font = Enum.Font.GothamBold
-CopyBtn.TextSize = 12
+CopyBtn.TextSize = 11
 CopyBtn.BorderSizePixel = 0
 CopyBtn.AutoButtonColor = false
 CopyBtn.Parent = BtnBar
@@ -392,7 +402,6 @@ ConsoleTab.BackgroundTransparency = 1
 ConsoleTab.Visible = false
 ConsoleTab.Parent = ContentFrame
 
--- Верхняя панель консоли
 local ConsoleTopBar = Instance.new("Frame")
 ConsoleTopBar.Size = UDim2.new(1, 0, 0, 34)
 ConsoleTopBar.BackgroundColor3 = Colors.Bg
@@ -437,7 +446,6 @@ TestLogBtn.AutoButtonColor = false
 TestLogBtn.Parent = ConsoleTopBar
 addCorner(TestLogBtn, 6)
 
--- Сама консоль (список логов)
 local ConsoleList = Instance.new("ScrollingFrame")
 ConsoleList.Size = UDim2.new(1, 0, 1, -42)
 ConsoleList.Position = UDim2.new(0, 0, 0, 42)
@@ -456,7 +464,7 @@ ConsoleLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ConsoleLayout.Parent = ConsoleList
 
 -- ═══════════════════════════════════════════════════════
--- 📃 ФУНКЦИЯ ЛОГА В GUI-КОНСОЛЬ
+-- 📃 GUI-КОНСОЛЬ
 -- ═══════════════════════════════════════════════════════
 local LogCount = 0
 local function guiLog(text, color)
@@ -472,12 +480,10 @@ local function guiLog(text, color)
     label.TextWrapped = true
     label.Parent = ConsoleList
 
-    -- Автопрокрутка вниз
     task.defer(function()
         ConsoleList.CanvasPosition = Vector2.new(0, ConsoleList.AbsoluteCanvasSize.Y)
     end)
 
-    -- Ограничение количества строк
     if LogCount > 200 then
         local first = ConsoleList:FindFirstChildOfClass("TextLabel")
         if first then first:Destroy() end
@@ -485,11 +491,8 @@ local function guiLog(text, color)
     end
 end
 
--- Тестовые логи при загрузке
 guiLog("✅ Инспектор загружен!", Colors.Success)
 guiLog("🎯 Режим выбора ВКЛ", Colors.Warning)
-guiLog("Клик по объекту в мире → показ свойств", Colors.TextDim)
-guiLog("Используй вкладку 'Инспектор' для просмотра", Colors.TextDim)
 
 -- ═══════════════════════════════════════════════════════
 -- 🎯 ВЫДЕЛЕНИЕ ОБЪЕКТА
@@ -506,6 +509,164 @@ SelectionBox.Color3 = Colors.Highlight
 SelectionBox.Transparency = 0.3
 SelectionBox.Visible = false
 SelectionBox.Parent = HighlightGui
+
+-- ═══════════════════════════════════════════════════════
+-- 📌 E-МАРКЕРЫ (иконки "E" над объектами)
+-- ═══════════════════════════════════════════════════════
+local EMarkersGui = Instance.new("ScreenGui")
+EMarkersGui.Name = "ObjInspector_EMarkers"
+EMarkersGui.ResetOnSpawn = false
+EMarkersGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() EMarkersGui.Parent = CoreGui end)
+if not EMarkersGui.Parent then EMarkersGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local EMarkers = {}       -- {[instance] = BillboardGui}
+local EMarkersEnabled = false
+local MaxEMarkers = 150   -- ограничение чтобы не лагало
+
+-- Создать E-маркер для объекта
+local function createEMarker(instance)
+    if EMarkers[instance] then return end
+    if not instance or not instance.Parent then return end
+    if not (instance:IsA("BasePart") or instance:IsA("Model")) then return end
+
+    -- Проверяем что объект не внутри персонажа
+    if instance:IsDescendantOf(LocalPlayer.Character) then return end
+
+    -- Определяем точку привязки
+    local adornee = nil
+    local offset = Vector3.new(0, 3, 0)
+
+    if instance:IsA("BasePart") then
+        adornee = instance
+        offset = Vector3.new(0, instance.Size.Y / 2 + 1.5, 0)
+    elseif instance:IsA("Model") then
+        local primary = instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart")
+        if not primary then return end
+        adornee = primary
+        local size = primary.Size
+        offset = Vector3.new(0, size.Y / 2 + 1.5, 0)
+    end
+
+    if not adornee then return end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "EMarker"
+    billboard.Size = UDim2.new(0, 40, 0, 40)
+    billboard.StudsOffset = offset
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = 200       -- показывать только в радиусе 200 studs
+    billboard.Adornee = adornee
+    billboard.Parent = EMarkersGui
+
+    -- Фон (кружок)
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    bg.BackgroundTransparency = 0.2
+    bg.BorderSizePixel = 0
+    bg.Parent = billboard
+    addCorner(bg, 20)
+    addStroke(bg, Colors.EColor, 2)
+
+    -- Буква E
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "E"
+    lbl.TextColor3 = Colors.EColor
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 20
+    lbl.TextStrokeTransparency = 0
+    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lbl.Parent = billboard
+
+    -- Клик по кнопке E
+    local clickBtn = Instance.new("TextButton")
+    clickBtn.Size = UDim2.new(1, 0, 1, 0)
+    clickBtn.BackgroundTransparency = 1
+    clickBtn.Text = ""
+    clickBtn.Parent = billboard
+
+    clickBtn.MouseButton1Click:Connect(function()
+        guiLog("📌 E-клик по: " .. instance.ClassName .. " [" .. instance.Name .. "]", Colors.EColor)
+        showObject(instance)
+        -- Переключить на вкладку Инспектор если открыта консоль
+        selectTab(1)
+    end)
+
+    EMarkers[instance] = {
+        Gui = billboard,
+        Adornee = adornee,
+    }
+end
+
+-- Удалить E-маркер
+local function removeEMarker(instance)
+    local marker = EMarkers[instance]
+    if marker then
+        pcall(function() marker.Gui:Destroy() end)
+        EMarkers[instance] = nil
+    end
+end
+
+-- Очистить все E-маркеры
+local function clearAllEMarkers()
+    for instance, marker in pairs(EMarkers) do
+        pcall(function() marker.Gui:Destroy() end)
+    end
+    EMarkers = {}
+end
+
+-- Сканировать и добавить E-маркеры на все объекты
+local function eToAll()
+    clearAllEMarkers()
+    local count = 0
+    local scanned = 0
+
+    -- Обходим workspace
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if count >= MaxEMarkers then break end
+        scanned = scanned + 1
+
+        -- Пропускаем лишнее
+        if obj:IsA("BasePart") and not obj:IsDescendantOf(LocalPlayer.Character) then
+            -- Пропускаем части персонажей других игроков
+            local isCharPart = false
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr.Character and obj:IsDescendantOf(plr.Character) then
+                    isCharPart = true
+                    break
+                end
+            end
+            -- Пропускаем Terrain и очень мелкие
+            if not isCharPart
+               and obj.Name ~= "Terrain"
+               and obj.Size.Magnitude > 1 then
+                createEMarker(obj)
+                count = count + 1
+            end
+        end
+    end
+
+    guiLog("📌 E to all: создано " .. count .. " маркеров (просканировано " .. scanned .. ")", Colors.EColor)
+end
+
+-- Периодическое обновление (чтобы маркеры не исчезали при появлении новых)
+task.spawn(function()
+    while EMarkersEnabled do
+        task.wait(3)
+        if not EMarkersEnabled then break end
+
+        -- Убираем маркеры от удалённых объектов
+        for instance, marker in pairs(EMarkers) do
+            if not instance.Parent then
+                pcall(function() marker.Gui:Destroy() end)
+                EMarkers[instance] = nil
+            end
+        end
+    end
+end)
 
 -- ═══════════════════════════════════════════════════════
 -- 🖱️ ЛОГИКА ВЫБОРА
@@ -562,7 +723,7 @@ local function addPropRow(parent, propName, propValue, isSection)
     return row
 end
 
-local function showObject(obj)
+function showObject(obj)
     CurrentObject = obj
     SelectionBox.Adornee = obj
     SelectionBox.Visible = true
@@ -581,13 +742,11 @@ local function showObject(obj)
         StatusPos.Text = ""
     end
 
-    -- Лог в GUI-консоль
     guiLog("📦 Выбран: " .. obj.ClassName .. " [" .. obj.Name .. "]", Colors.Success)
     if obj:IsA("BasePart") then
         guiLog(string.format("   Position: (%.3f, %.3f, %.3f)", obj.Position.X, obj.Position.Y, obj.Position.Z), Colors.LogText)
     end
 
-    -- Заполняем свойства
     clearList(PropsList)
     AllProps = {}
 
@@ -653,7 +812,6 @@ local function showObject(obj)
         addPropRow(PropsList, "⚠ Ошибка", tostring(err), false)
     end
 
-    -- Дети
     clearList(ChildrenList)
     AllChildren = {}
     for _, child in ipairs(obj:GetChildren()) do
@@ -691,7 +849,7 @@ local function showObject(obj)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🔍 ПОИСК СВОЙСТВА
+-- 🔍 ПОИСК
 -- ═══════════════════════════════════════════════════════
 SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
     local query = SearchBox.Text:lower()
@@ -707,13 +865,13 @@ SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 🖱️ REYCAST
+-- 🖱️ RAYCAST И ВЫБОР
 -- ═══════════════════════════════════════════════════════
 local function raycastFromScreen(x, y)
     local unitRay = Camera:ViewportPointToRay(x, y)
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, MainGui, HighlightGui}
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, MainGui, HighlightGui, EMarkersGui}
     rayParams.IgnoreWater = true
     local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 5000, rayParams)
     if result then
@@ -731,7 +889,7 @@ local selectConn = UserInputService.InputBegan:Connect(function(input, gpe)
         local mousePos = UserInputService:GetMouseLocation()
         local guiAtPos = LocalPlayer.PlayerGui:GetGuiObjectsAtPosition(mousePos.X, mousePos.Y)
         for _, obj in pairs(guiAtPos) do
-            if obj:IsDescendantOf(MainGui) then return end
+            if obj:IsDescendantOf(MainGui) or obj:IsDescendantOf(EMarkersGui) then return end
         end
 
         task.wait(0.05)
@@ -743,18 +901,33 @@ local selectConn = UserInputService.InputBegan:Connect(function(input, gpe)
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 🎛️ УПРАВЛЕНИЕ
+-- 🎛️ КНОПКИ
 -- ═══════════════════════════════════════════════════════
 SelectModeBtn.MouseButton1Click:Connect(function()
     SelectMode = not SelectMode
     if SelectMode then
-        SelectModeBtn.Text = "🎯 РЕЖИМ ВЫБОРА: ВКЛ"
+        SelectModeBtn.Text = "🎯 ВЫБОР: ВКЛ"
         SelectModeBtn.BackgroundColor3 = Colors.Success
         guiLog("🎯 Режим выбора ВКЛ", Colors.Success)
     else
-        SelectModeBtn.Text = "🎯 РЕЖИМ ВЫБОРА: ВЫКЛ"
+        SelectModeBtn.Text = "🎯 ВЫБОР: ВЫКЛ"
         SelectModeBtn.BackgroundColor3 = Colors.Danger
         guiLog("🎯 Режим выбора ВЫКЛ", Colors.Danger)
+    end
+end)
+
+EToAllBtn.MouseButton1Click:Connect(function()
+    EMarkersEnabled = not EMarkersEnabled
+    if EMarkersEnabled then
+        EToAllBtn.Text = "📌 E to all: ВКЛ"
+        EToAllBtn.BackgroundColor3 = Colors.Success
+        guiLog("📌 E to all — создаём маркеры...", Colors.EColor)
+        eToAll()
+    else
+        EToAllBtn.Text = "📌 E to all"
+        EToAllBtn.BackgroundColor3 = Colors.Warning
+        clearAllEMarkers()
+        guiLog("📌 E-маркеры удалены", Colors.Warning)
     end
 end)
 
@@ -775,7 +948,6 @@ CopyBtn.MouseButton1Click:Connect(function()
         guiLog("  • " .. child.ClassName .. " [" .. child.Name .. "]", Colors.LogText)
     end
     guiLog("════════════════════════════", Colors.TextDim)
-    guiLog("✓ Свойства выведены в консоль выше", Colors.Success)
 end)
 
 PropsTabBtn.MouseButton1Click:Connect(function()
@@ -800,18 +972,17 @@ end)
 
 TestLogBtn.MouseButton1Click:Connect(function()
     guiLog("🧪 Тестовое сообщение #" .. math.random(1000, 9999), Colors.Accent)
-    guiLog("   Position: (%.2f, %.2f, %.2f)", Colors.LogText)
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 📑 ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК
+-- 📑 ВКЛАДКИ
 -- ═══════════════════════════════════════════════════════
 local Tabs = {
     {Name = "Инспектор", Frame = InspectorTab},
     {Name = "Консоль", Frame = ConsoleTab},
 }
 
-local function selectTab(index)
+function selectTab(index)
     for i, tab in ipairs(Tabs) do
         tab.Frame.Visible = (i == index)
         if tab.Button then
@@ -865,19 +1036,23 @@ CloseBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 🌐 ПУБЛИЧНОЕ API
+-- 🌐 API
 -- ═══════════════════════════════════════════════════════
 getgenv().ObjInf = {
     Show = function() MainGui.Enabled = true end,
     Hide = function() MainGui.Enabled = false end,
     Destroy = function()
         if selectConn then selectConn:Disconnect() end
+        clearAllEMarkers()
         pcall(function() SelectionBox:Destroy() end)
         pcall(function() MainGui:Destroy() end)
+        pcall(function() EMarkersGui:Destroy() end)
         getgenv().OBJ_INF_LOADED = false
     end,
     Inspect = showObject,
     Log = guiLog,
+    EToAll = eToAll,
+    ClearEMarkers = clearAllEMarkers,
 }
 
 getgenv().InspectPart = function(part)
@@ -887,7 +1062,6 @@ getgenv().InspectPart = function(part)
 end
 
 print("[ObjInf] ✅ Инспектор загружен!")
-print("[ObjInf] Клик по объекту в мире → показ свойств")
+print("[ObjInf] Тап по объекту → инфа")
+print("[ObjInf] Кнопка «E to all» → E-маркеры на всех объектах")
 print("[ObjInf] Скрыть: getgenv().ObjInf.Hide()")
-print("[ObjInf] Показать: getgenv().ObjInf.Show()")
-print("[ObjInf] Программно: getgenv().InspectPart(game.Workspace.Part)")
