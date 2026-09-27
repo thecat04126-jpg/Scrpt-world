@@ -1,6 +1,6 @@
 --[[
     N.lua — ESP + AUTO ACTIONS + ROUTES + DOOR WATCHER
-    Версия: 8.1 (исправлены ошибки отрисовки)
+    Версия: 8.2 (исправлены ошибки)
     Для Delta Executor
 --]]
 
@@ -116,6 +116,7 @@ local InitialDistance = 0
 local ProcessedPlayers = {}
 local IgnoredPlayers = {}
 local Queue = {}
+local CurrentTarget = nil  -- ✅ ИСПРАВЛЕНО: объявлена переменная
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -578,7 +579,7 @@ TitleIcon.TextXAlignment = Enum.TextXAlignment.Left
 TitleIcon.Parent = TitleBar
 
 local Title = Instance.new("TextLabel")
-Title.Text = "ESP + AUTO ACTIONS v8.1"
+Title.Text = "ESP + AUTO ACTIONS v8.2"
 Title.Size = UDim2.new(1, -150, 1, 0)
 Title.Position = UDim2.new(0, 60, 0, 0)
 Title.BackgroundTransparency = 1
@@ -792,7 +793,7 @@ local function makeInput(parent, text, default, callback)
     input.Size = UDim2.new(0.45, -12, 0, 24)
     input.Position = UDim2.new(0.55, 0, 0.5, -12)
     input.BackgroundColor3 = Theme.BgLighter
-    input.Text = tostring(default)
+    input.Text = tostring(default or 0)
     input.TextColor3 = Theme.Text
     input.Font = Enum.Font.Gotham
     input.TextSize = 12
@@ -809,7 +810,7 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 ПРИЦЕЛ (объявлен ДО использования)
+-- 🎯 ПРИЦЕЛ
 -- ═══════════════════════════════════════════════════════
 local CrosshairGui = Instance.new("ScreenGui")
 CrosshairGui.Name = "ESP_Crosshair"
@@ -934,10 +935,9 @@ SelectBtn.AutoButtonColor = false
 SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
 
--- Глобальные переменные для прицела
 local currentPickKey = nil
 local currentPickName = nil
-local refreshButtonLabels = function() end  -- будет переопределено
+local refreshButtonLabels = function() end
 
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then return end
@@ -1070,7 +1070,6 @@ local function createESP(player)
 
     ESPCache[player] = esp
 
-    -- Привязка если персонаж уже есть
     if player.Character then
         highlight.Adornee = player.Character
         local head = player.Character:FindFirstChild("Head")
@@ -1079,7 +1078,6 @@ local function createESP(player)
         end
     end
 
-    -- Следим за появлением/сменой персонажа
     player.CharacterAdded:Connect(function(character)
         task.wait(0.5)
         if esp.Highlight then esp.Highlight.Adornee = character end
@@ -1191,6 +1189,7 @@ makeTestBtn("Reset state", function()
     IgnoredPlayers = {}
     Queue = {}
     doorOpenHandled = {}
+    CurrentTarget = nil
     log("State reset", Theme.Warning)
 end, Theme.Danger)
 
@@ -1198,7 +1197,6 @@ end, Theme.Danger)
 -- 📋 ВКЛАДКА "НАСТРОЙКИ"
 -- ═══════════════════════════════════════════════════════
 
--- КООРДИНАТЫ КНОПОК
 makeSection(SettingsTab, "BUTTON COORDS")
 
 local buttonLabelRefs = {}
@@ -1242,7 +1240,6 @@ local function makeButtonSetter(name, key)
     buttonLabelRefs[key] = {btn = btn, name = name}
 end
 
--- Переопределяем refreshButtonLabels
 refreshButtonLabels = function()
     for key, ref in pairs(buttonLabelRefs) do
         local data = Settings.Buttons[key]
@@ -1262,7 +1259,8 @@ makeButtonSetter("CheckWeapon", "CheckWeapon")
 makeButtonSetter("Deactivate", "Deactivate")
 makeButtonSetter("NumberUp", "NumberUp")
 
--- СДВИГИ
+refreshButtonLabels()
+
 makeSection(SettingsTab, "TAP OFFSETS")
 makeInput(SettingsTab, "Offset X (e.g. -50)", Settings.CrosshairOffsetX, function(v)
     Settings.CrosshairOffsetX = v
@@ -1273,7 +1271,6 @@ makeInput(SettingsTab, "Offset Y (e.g. 50)", Settings.CrosshairOffsetY, function
     log("Offset Y: " .. v, Theme.Warning)
 end)
 
--- HOME
 makeSection(SettingsTab, "HOME POSITION")
 makeInput(SettingsTab, "Home X", RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0, function(v)
     local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
@@ -1291,7 +1288,6 @@ makeInput(SettingsTab, "Home Z", RouteSettings.HomePosition and RouteSettings.Ho
     setHomePosition(Vector3.new(x, y, v))
 end)
 
--- WATCHER
 makeSection(SettingsTab, "DOOR WATCHER")
 makeToggle(SettingsTab, "Watch doors", RouteSettings.WatchDoors, function(v)
     RouteSettings.WatchDoors = v
@@ -1303,7 +1299,6 @@ makeInput(SettingsTab, "NumberUp retries", RouteSettings.NumberUpRetryCount, fun
 makeInput(SettingsTab, "Retry delay (sec)", RouteSettings.NumberUpRetryDelay, function(v) RouteSettings.NumberUpRetryDelay = v end)
 makeToggle(SettingsTab, "Return home on player left", RouteSettings.ReturnHomeOnPlayerLeft, function(v) RouteSettings.ReturnHomeOnPlayerLeft = v end)
 
--- AUTO ACTIONS
 makeSection(SettingsTab, "AUTO ACTIONS")
 makeToggle(SettingsTab, "Auto Actions ON", Settings.AutoActions, function(v)
     Settings.AutoActions = v
@@ -1314,7 +1309,6 @@ makeToggle(SettingsTab, "Press GiveTicket", Settings.DoGiveTicket, function(v) S
 makeToggle(SettingsTab, "Press CheckWeapon", Settings.DoCheckWeapon, function(v) Settings.DoCheckWeapon = v end)
 makeToggle(SettingsTab, "Press Deactivate", Settings.DoDeactivate, function(v) Settings.DoDeactivate = v end)
 
--- PARAMETERS
 makeSection(SettingsTab, "PARAMETERS")
 makeInput(SettingsTab, "Trigger radius (m)", Settings.TriggerRadius, function(v) Settings.TriggerRadius = v end)
 makeInput(SettingsTab, "Approach threshold (m)", Settings.ApproachThreshold, function(v) Settings.ApproachThreshold = v end)
@@ -1325,7 +1319,6 @@ makeInput(SettingsTab, "Wait if left (s)", Settings.WaitLeftWithoutApproach, fun
 makeInput(SettingsTab, "Queue delay (s)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
 makeInput(SettingsTab, "Ignore after deact (s)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
 
--- ESP
 makeSection(SettingsTab, "ESP")
 makeToggle(SettingsTab, "ESP ON", Settings.Enabled, function(v) Settings.Enabled = v end)
 makeToggle(SettingsTab, "Show name", Settings.ShowName, function(v) Settings.ShowName = v end)
@@ -1399,7 +1392,9 @@ RunService.RenderStepped:Connect(function(dt)
     checkDoorChanges()
 
     -- Автодействия
-    if not Settings.AutoActions then return end
+    if not Settings.AutoActions then
+        return
+    end
     StateTimer = StateTimer + dt
 
     local now = tick()
@@ -1617,6 +1612,7 @@ end)
 
 CloseBtn.MouseButton1Click:Connect(function()
     MainGui.Enabled = false
+    CrosshairGui.Enabled = false
     log("UI hidden. Show: getgenv().ShowUI()", Theme.Warning)
 end)
 
@@ -1646,9 +1642,14 @@ getgenv().ESP = {
     end,
 }
 
-getgenv().ShowUI = function() MainGui.Enabled = true end
-getgenv().HideUI = function() MainGui.Enabled = false end
+getgenv().ShowUI = function()
+    MainGui.Enabled = true
+end
+getgenv().HideUI = function()
+    MainGui.Enabled = false
+    CrosshairGui.Enabled = false
+end
 
-log("Script v8.1 loaded!", Theme.Success)
+log("Script v8.2 loaded!", Theme.Success)
 log("Settings -> BUTTON COORDS for coordinates", Theme.Warning)
 log("Crosshair: press Select", Theme.Warning)
