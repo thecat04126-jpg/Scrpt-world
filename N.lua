@@ -1,6 +1,6 @@
 --[[
     PLAYERS ESP + AUTO ACTIONS + UI
-    Версия: 3.2 (прицел без чёрного квадрата + клик по координатам)
+    Версия: 3.3 (финальная)
     Для Delta Executor
 --]]
 
@@ -64,8 +64,6 @@ local Settings = {
     },
 
     CrosshairColor = Color3.fromRGB(0, 255, 100),
-    CrosshairSize = 80,
-    CrosshairBoxSize = 180,
 }
 
 local ESPCache = {}
@@ -73,6 +71,7 @@ local CurrentTarget = nil
 local ActionState = "idle"
 local StateTimer = 0
 local InitialDistance = 0
+local ProcessedPlayers = {}     -- защита от повторной обработки
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -123,12 +122,40 @@ local function makeDraggable(frame, handle)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🔍 ПОИСК И КЛИК ПО КНОПКЕ ПО КООРДИНАТАМ
+-- 📋 ЛОГ (объявлен ДО использования)
+-- ═══════════════════════════════════════════════════════
+local ConsoleTab  -- объявим заранее, заполним позже
+
+local function log(text, color)
+    if not ConsoleTab then
+        print("[ESP] " .. tostring(text))
+        return
+    end
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -8, 0, 20)
+    label.BackgroundTransparency = 1
+    label.Text = "›  " .. tostring(text)
+    label.TextColor3 = color or Theme.Text
+    label.Font = Enum.Font.Code
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = ConsoleTab
+    local children = ConsoleTab:GetChildren()
+    if #children > 105 then
+        for i = 1, 10 do
+            if children[i] and children[i]:IsA("TextLabel") then
+                children[i]:Destroy()
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 🔍 ПОИСК КНОПКИ ПО КООРДИНАТАМ
 -- ═══════════════════════════════════════════════════════
 local function findButtonAtPosition(x, y)
     local candidates = {}
 
-    -- PlayerGui
     pcall(function()
         for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
             if gui:IsA("ScreenGui") and gui.Enabled then
@@ -140,7 +167,6 @@ local function findButtonAtPosition(x, y)
         end
     end)
 
-    -- CoreGui
     pcall(function()
         for _, gui in pairs(CoreGui:GetChildren()) do
             if gui:IsA("ScreenGui") and gui.Enabled then
@@ -152,35 +178,54 @@ local function findButtonAtPosition(x, y)
         end
     end)
 
-    -- Ищем кнопку или её родителя-кнопку
     for _, obj in ipairs(candidates) do
-        if obj:IsA("GuiButton") then
-            return obj
-        end
+        if obj:IsA("GuiButton") then return obj end
         local p = obj.Parent
         while p and p ~= game do
-            if p:IsA("GuiButton") then
-                return p
-            end
+            if p:IsA("GuiButton") then return p end
             p = p.Parent
         end
     end
     return nil
 end
 
+-- ═══════════════════════════════════════════════════════
+-- 🖱️ СИМУЛЯЦИЯ КЛИКА
+-- ═══════════════════════════════════════════════════════
 local function simulateClick(button, x, y)
     if not button then return false end
+
+    -- Метод 1: событие
     pcall(function() button.MouseButton1Click:Fire() end)
+
+    -- Метод 2: MouseDown/Up события
     pcall(function()
         button.MouseButton1Down:Fire(x or 0, y or 0)
         button.MouseButton1Up:Fire(x or 0, y or 0)
     end)
+
+    -- Метод 3: Activate
     pcall(function()
         if button.Activate then button:Activate() end
     end)
+
+    -- Метод 4: РЕАЛЬНАЯ эмуляция через VirtualInputManager
+    pcall(function()
+        local VIM = game:GetService("VirtualInputManager")
+        local center = button.AbsolutePosition + button.AbsoluteSize / 2
+        VIM:SendMouseMoveEvent(center, false)
+        task.wait(0.03)
+        VIM:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
+        task.wait(0.05)
+        VIM:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
+    end)
+
     return true
 end
 
+-- ═══════════════════════════════════════════════════════
+-- 🎯 ВЫПОЛНЕНИЕ ДЕЙСТВИЯ (объявлено ДО использования)
+-- ═══════════════════════════════════════════════════════
 function fireButtonAction(btnData)
     if not btnData then return false end
 
@@ -193,23 +238,15 @@ function fireButtonAction(btnData)
             log("✓ Клик: " .. button.Name .. " (" .. button.ClassName .. ")", Theme.Success)
             return true
         end
-        log("⚠ Кнопка не найдена на X=" .. x .. ", Y=" .. y, Theme.Danger)
-    end
-
-    -- Резерв: по пути
-    if btnData.Path and btnData.Path ~= "" then
-        local parts = {}
-        for part in string.gmatch(btnData.Path, "[^%.]+") do
-            table.insert(parts, part)
-        end
-        local obj = LocalPlayer.PlayerGui
-        for _, part in ipairs(parts) do
-            if obj then obj = obj:FindFirstChild(part) end
-        end
-        if obj and obj:IsA("GuiButton") then
-            simulateClick(obj)
-            return true
-        end
+        -- Кнопка не найдена — пробуем просто кликнуть в точку
+        pcall(function()
+            local VIM = game:GetService("VirtualInputManager")
+            VIM:SendMouseButtonEvent(x, y, 0, true, game, 1)
+            task.wait(0.05)
+            VIM:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        end)
+        log("⚠ Кнопка не найдена — клик в точку X=" .. x .. ", Y=" .. y, Theme.Warning)
+        return false
     end
 
     return false
@@ -314,7 +351,7 @@ ContentFrame.Parent = MainFrame
 addCorner(ContentFrame, 10)
 
 -- Консоль
-local ConsoleTab = Instance.new("ScrollingFrame")
+ConsoleTab = Instance.new("ScrollingFrame")
 ConsoleTab.Size = UDim2.new(1, -12, 1, -12)
 ConsoleTab.Position = UDim2.new(0, 6, 0, 6)
 ConsoleTab.BackgroundTransparency = 1
@@ -330,26 +367,6 @@ local ConsoleLayout = Instance.new("UIListLayout")
 ConsoleLayout.Padding = UDim.new(0, 3)
 ConsoleLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ConsoleLayout.Parent = ConsoleTab
-
-function log(text, color)
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -8, 0, 20)
-    label.BackgroundTransparency = 1
-    label.Text = "›  " .. tostring(text)
-    label.TextColor3 = color or Theme.Text
-    label.Font = Enum.Font.Code
-    label.TextSize = 12
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = ConsoleTab
-    local children = ConsoleTab:GetChildren()
-    if #children > 105 then
-        for i = 1, 10 do
-            if children[i] and children[i]:IsA("TextLabel") then
-                children[i]:Destroy()
-            end
-        end
-    end
-end
 
 log("Консоль инициализирована", Theme.TextDim)
 
@@ -416,6 +433,7 @@ local function makeButton(parent, text, callback, color)
     btn.AutoButtonColor = false
     btn.Parent = parent
     addCorner(btn, 8)
+    btn:SetAttribute("BaseColor", color or Theme.BgLighter)
 
     btn.MouseEnter:Connect(function()
         TweenService:Create(btn, TweenInfo.new(0.15), {
@@ -424,10 +442,9 @@ local function makeButton(parent, text, callback, color)
     end)
     btn.MouseLeave:Connect(function()
         TweenService:Create(btn, TweenInfo.new(0.15), {
-            BackgroundColor3 = btn:GetAttribute("BaseColor") or color or Theme.BgLighter
+            BackgroundColor3 = btn:GetAttribute("BaseColor")
         }):Play()
     end)
-    btn:SetAttribute("BaseColor", color or Theme.BgLighter)
     btn.MouseButton1Click:Connect(callback)
     return btn
 end
@@ -516,135 +533,143 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 ОКНО ПРИЦЕЛА (без чёрного квадрата)
+-- 🎯 ПРИЦЕЛ (крест отдельно, окно отдельно)
 -- ═══════════════════════════════════════════════════════
 local CrosshairGui = Instance.new("ScreenGui")
 CrosshairGui.Name = "ESP_Crosshair"
 CrosshairGui.ResetOnSpawn = false
 CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 CrosshairGui.IgnoreGuiInset = true
+CrosshairGui.DisplayOrder = 999
 CrosshairGui.Enabled = false
 pcall(function() CrosshairGui.Parent = CoreGui end)
 if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- ─── Окно ───
-local CrossFrame = Instance.new("Frame")
-CrossFrame.Size = UDim2.new(0, 320, 0, 380)
-CrossFrame.Position = UDim2.new(0.5, -160, 0.5, -190)
-CrossFrame.BackgroundColor3 = Theme.Bg
-CrossFrame.BorderSizePixel = 0
-CrossFrame.Active = true
-CrossFrame.Parent = CrosshairGui
-addCorner(CrossFrame, 12)
-addStroke(CrossFrame, Theme.Border, 1.5)
-makeDraggable(CrossFrame)
-
--- Заголовок окна
-local CrossTitle = Instance.new("Frame")
-CrossTitle.Size = UDim2.new(1, 0, 0, 38)
-CrossTitle.BackgroundColor3 = Theme.BgLight
-CrossTitle.BorderSizePixel = 0
-CrossTitle.Parent = CrossFrame
-addCorner(CrossTitle, 12)
-
-local CrossTitleFix = Instance.new("Frame")
-CrossTitleFix.Size = UDim2.new(1, 0, 0, 10)
-CrossTitleFix.Position = UDim2.new(0, 0, 1, -10)
-CrossTitleFix.BackgroundColor3 = Theme.BgLight
-CrossTitleFix.BorderSizePixel = 0
-CrossTitleFix.Parent = CrossTitle
-
-local CrossTitleLbl = Instance.new("TextLabel")
-CrossTitleLbl.Text = "🎯 ПРИЦЕЛ"
-CrossTitleLbl.Size = UDim2.new(1, -20, 1, 0)
-CrossTitleLbl.Position = UDim2.new(0, 10, 0, 0)
-CrossTitleLbl.BackgroundTransparency = 1
-CrossTitleLbl.TextColor3 = Theme.Text
-CrossTitleLbl.Font = Enum.Font.GothamBold
-CrossTitleLbl.TextSize = 14
-CrossTitleLbl.TextXAlignment = Enum.TextXAlignment.Center
-CrossTitleLbl.Parent = CrossTitle
-
--- ─── Область прицела (БЕЗ фона, БЕЗ рамки — только для центрирования креста) ───
-local SquareArea = Instance.new("Frame")
-SquareArea.Name = "SquareArea"
-SquareArea.Size = UDim2.new(0, Settings.CrosshairBoxSize, 0, Settings.CrosshairBoxSize)
-SquareArea.Position = UDim2.new(0.5, -Settings.CrosshairBoxSize/2, 0, 60)
-SquareArea.BackgroundTransparency = 1     -- ⬅️ полностью прозрачный
-SquareArea.BorderSizePixel = 0
-SquareArea.Parent = CrossFrame
--- UIStroke не добавляем — рамки нет
-
 -- ─── Крест ───
+local CrossHandle = Instance.new("TextButton")
+CrossHandle.Name = "CrossHandle"
+CrossHandle.Size = UDim2.new(0, 80, 0, 80)
+CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
+CrossHandle.BackgroundTransparency = 1
+CrossHandle.Text = ""
+CrossHandle.AutoButtonColor = false
+CrossHandle.Active = true
+CrossHandle.ZIndex = 100
+CrossHandle.Parent = CrosshairGui
+
 local CrossH = Instance.new("Frame")
-CrossH.Name = "CrossH"
-CrossH.Size = UDim2.new(0, Settings.CrosshairSize, 0, 2)
-CrossH.Position = UDim2.new(0.5, -Settings.CrosshairSize/2, 0.5, -1)
+CrossH.Size = UDim2.new(0, 60, 0, 2)
+CrossH.Position = UDim2.new(0.5, -30, 0.5, -1)
 CrossH.BackgroundColor3 = Settings.CrosshairColor
 CrossH.BorderSizePixel = 0
-CrossH.Parent = SquareArea
+CrossH.Parent = CrossHandle
 
 local CrossV = Instance.new("Frame")
-CrossV.Name = "CrossV"
-CrossV.Size = UDim2.new(0, 2, 0, Settings.CrosshairSize)
-CrossV.Position = UDim2.new(0.5, -1, 0.5, -Settings.CrosshairSize/2)
+CrossV.Size = UDim2.new(0, 2, 0, 60)
+CrossV.Position = UDim2.new(0.5, -1, 0.5, -30)
 CrossV.BackgroundColor3 = Settings.CrosshairColor
 CrossV.BorderSizePixel = 0
-CrossV.Parent = SquareArea
+CrossV.Parent = CrossHandle
 
--- Центральная точка (координаты)
 local CrossDot = Instance.new("Frame")
-CrossDot.Name = "CrossDot"
-CrossDot.Size = UDim2.new(0, 6, 0, 6)
-CrossDot.Position = UDim2.new(0.5, -3, 0.5, -3)
+CrossDot.Size = UDim2.new(0, 8, 0, 8)
+CrossDot.Position = UDim2.new(0.5, -4, 0.5, -4)
 CrossDot.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
 CrossDot.BorderSizePixel = 0
-CrossDot.Parent = SquareArea
-addCorner(CrossDot, 3)
+CrossDot.ZIndex = 101
+CrossDot.Parent = CrossHandle
+addCorner(CrossDot, 4)
 
--- Обводка для видимости
+-- Обводки для видимости
 local dotStroke = Instance.new("UIStroke")
 dotStroke.Color = Color3.fromRGB(0, 0, 0)
-dotStroke.Thickness = 1.5
+dotStroke.Thickness = 2
 dotStroke.Parent = CrossDot
 
 local hStroke = Instance.new("UIStroke")
 hStroke.Color = Color3.fromRGB(0, 0, 0)
-hStroke.Thickness = 1.5
+hStroke.Thickness = 2
 hStroke.Parent = CrossH
 
 local vStroke = Instance.new("UIStroke")
 vStroke.Color = Color3.fromRGB(0, 0, 0)
-vStroke.Thickness = 1.5
+vStroke.Thickness = 2
 vStroke.Parent = CrossV
 
--- Подпись координат
-local CoordLabel = Instance.new("TextLabel")
-CoordLabel.Name = "CoordLabel"
-CoordLabel.Size = UDim2.new(1, -20, 0, 24)
-CoordLabel.Position = UDim2.new(0, 10, 0, 60 + Settings.CrosshairBoxSize + 6)
-CoordLabel.BackgroundColor3 = Theme.BgLight
-CoordLabel.Text = "X: —   Y: —"
-CoordLabel.TextColor3 = Theme.Text
-CoordLabel.Font = Enum.Font.Code
-CoordLabel.TextSize = 13
-CoordLabel.BorderSizePixel = 0
-CoordLabel.Parent = CrossFrame
-addCorner(CoordLabel, 6)
+-- Перетаскивание креста
+local isDragging = false
+local dragStart, startPos
+CrossHandle.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
+        isDragging = true
+        dragStart = input.Position
+        startPos = CrossHandle.Position
+    end
+end)
+CrossHandle.InputChanged:Connect(function(input)
+    if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+       or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        CrossHandle.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+CrossHandle.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
+        isDragging = false
+    end
+end)
 
--- Кнопка "Выбрать"
+-- ─── Панель управления ───
+local CrossPanel = Instance.new("Frame")
+CrossPanel.Size = UDim2.new(0, 320, 0, 110)
+CrossPanel.Position = UDim2.new(0.5, -160, 1, -130)
+CrossPanel.BackgroundColor3 = Theme.Bg
+CrossPanel.BackgroundTransparency = 0.05
+CrossPanel.BorderSizePixel = 0
+CrossPanel.Active = true
+CrossPanel.ZIndex = 50
+CrossPanel.Parent = CrosshairGui
+addCorner(CrossPanel, 12)
+addStroke(CrossPanel, Theme.Accent, 2)
+makeDraggable(CrossPanel)
+
+local CrossTitleLbl = Instance.new("TextLabel")
+CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — Активировать"
+CrossTitleLbl.Size = UDim2.new(1, -20, 0, 26)
+CrossTitleLbl.Position = UDim2.new(0, 10, 0, 6)
+CrossTitleLbl.BackgroundTransparency = 1
+CrossTitleLbl.TextColor3 = Theme.Text
+CrossTitleLbl.Font = Enum.Font.GothamBold
+CrossTitleLbl.TextSize = 13
+CrossTitleLbl.TextXAlignment = Enum.TextXAlignment.Center
+CrossTitleLbl.Parent = CrossPanel
+
+local CoordLabel = Instance.new("TextLabel")
+CoordLabel.Size = UDim2.new(1, -20, 0, 22)
+CoordLabel.Position = UDim2.new(0, 10, 0, 34)
+CoordLabel.BackgroundTransparency = 1
+CoordLabel.Text = "X: —   Y: —"
+CoordLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
+CoordLabel.Font = Enum.Font.Code
+CoordLabel.TextSize = 14
+CoordLabel.Parent = CrossPanel
+
 local SelectBtn = Instance.new("TextButton")
-SelectBtn.Name = "SelectBtn"
 SelectBtn.Text = "Выбрать (текущие координаты)"
-SelectBtn.Size = UDim2.new(1, -20, 0, 40)
-SelectBtn.Position = UDim2.new(0, 10, 1, -52)
+SelectBtn.Size = UDim2.new(1, -20, 0, 36)
+SelectBtn.Position = UDim2.new(0, 10, 1, -44)
 SelectBtn.BackgroundColor3 = Theme.Accent
 SelectBtn.TextColor3 = Theme.Text
 SelectBtn.Font = Enum.Font.GothamBold
 SelectBtn.TextSize = 13
 SelectBtn.BorderSizePixel = 0
 SelectBtn.AutoButtonColor = false
-SelectBtn.Parent = CrossFrame
+SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
 
 SelectBtn.MouseEnter:Connect(function()
@@ -658,46 +683,37 @@ SelectBtn.MouseLeave:Connect(function()
     }):Play()
 end)
 
--- ─── Переменные выбора ───
 local currentPickKey = nil
 local currentPickName = nil
 
-local function updateCoordLabel()
-    if not currentPickKey then return end
-    local centerScreen = SquareArea.AbsolutePosition + SquareArea.AbsoluteSize/2
-    CoordLabel.Text = string.format("X: %d   Y: %d", centerScreen.X, centerScreen.Y)
-end
-
+-- Обновление координат в реальном времени
 RunService.RenderStepped:Connect(function()
-    if CrosshairGui.Enabled then
-        updateCoordLabel()
-    end
+    if not CrosshairGui.Enabled then return end
+    local center = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
+    CoordLabel.Text = string.format("X: %d   Y: %d", center.X, center.Y)
 end)
 
--- ─── Открытие окна ───
 local function openCrosshairPicker(key, displayName)
     currentPickKey = key
     currentPickName = displayName
     CrossTitleLbl.Text = "🎯 ПРИЦЕЛ — " .. displayName
     CrosshairGui.Enabled = true
     MainGui.Enabled = false
-    log("🎯 Выбор координат для: " .. displayName, Theme.Warning)
-    task.wait(0.1)
-    updateCoordLabel()
+    CrossHandle.Position = UDim2.new(0.5, -40, 0.5, -40)
+    log("🎯 Перетащи крест на кнопку и жми «Выбрать»", Theme.Warning)
 end
 
--- ─── Сохранение координат ───
+-- Сохранение
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then
         log("❌ Не выбрана цель", Theme.Danger)
         return
     end
 
-    local centerScreen = SquareArea.AbsolutePosition + SquareArea.AbsoluteSize/2
-    local x = math.floor(centerScreen.X)
-    local y = math.floor(centerScreen.Y)
+    local center = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
+    local x = math.floor(center.X)
+    local y = math.floor(center.Y)
 
-    -- Ищем кнопку прямо сейчас и сохраняем путь
     local foundButton = findButtonAtPosition(x, y)
     local path = nil
     if foundButton then
@@ -707,10 +723,10 @@ SelectBtn.MouseButton1Click:Connect(function()
             table.insert(parts, 1, obj.Name)
             obj = obj.Parent
         end
-        if #parts > 0 then
-            path = table.concat(parts, ".")
-        end
+        if #parts > 0 then path = table.concat(parts, ".") end
         log("✓ Найдена кнопка: " .. foundButton.Name, Theme.Success)
+    else
+        log("⚠ Кнопка не найдена — сохранены координаты", Theme.Warning)
     end
 
     Settings.Buttons[currentPickKey] = {
@@ -757,7 +773,6 @@ end)
 makeTestBtn("▶  Активировать", function()
     if Settings.Buttons.Activate then
         fireButtonAction(Settings.Buttons.Activate)
-        log("Тест: Активировать", Theme.Accent)
     else
         log("❌ Координаты не заданы", Theme.Danger)
     end
@@ -766,7 +781,6 @@ end)
 makeTestBtn("🎫 Выдать билет", function()
     if Settings.Buttons.GiveTicket then
         fireButtonAction(Settings.Buttons.GiveTicket)
-        log("Тест: Выдать билет", Theme.Accent)
     else
         log("❌ Координаты не заданы", Theme.Danger)
     end
@@ -775,7 +789,6 @@ end)
 makeTestBtn("🔫 Проверить оружие", function()
     if Settings.Buttons.CheckWeapon then
         fireButtonAction(Settings.Buttons.CheckWeapon)
-        log("Тест: Проверить оружие", Theme.Accent)
     else
         log("❌ Координаты не заданы", Theme.Danger)
     end
@@ -784,7 +797,6 @@ end)
 makeTestBtn("⏹  Деактивировать", function()
     if Settings.Buttons.Deactivate then
         fireButtonAction(Settings.Buttons.Deactivate)
-        log("Тест: Деактивировать", Theme.Accent)
     else
         log("❌ Координаты не заданы", Theme.Danger)
     end
@@ -794,6 +806,7 @@ makeTestBtn("🔄 Сбросить состояние", function()
     ActionState = "idle"
     CurrentTarget = nil
     StateTimer = 0
+    ProcessedPlayers = {}
     log("Состояние сброшено", Theme.Warning)
 end, Theme.Danger)
 
@@ -1007,7 +1020,7 @@ RunService.RenderStepped:Connect(function(dt)
 
     if ActionState == "idle" then
         for _, p in pairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character then
+            if p ~= LocalPlayer and p.Character and not ProcessedPlayers[p] then
                 local hrp = p.Character:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local d = (Camera.CFrame.Position - hrp.Position).Magnitude
@@ -1016,6 +1029,7 @@ RunService.RenderStepped:Connect(function(dt)
                         InitialDistance = d
                         ActionState = "waiting"
                         StateTimer = 0
+                        ProcessedPlayers[p] = true
                         log("👤 Обнаружен: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
                         if Settings.DoActivate then
                             fireButtonAction(Settings.Buttons.Activate)
@@ -1080,16 +1094,19 @@ end)
 -- 🎧 СОБЫТИЯ
 -- ═══════════════════════════════════════════════════════
 Players.PlayerAdded:Connect(createESP)
-Players.PlayerRemoving:Connect(removeESP)
+Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+    ProcessedPlayers[player] = nil
+end)
 for _, p in pairs(Players:GetPlayers()) do createESP(p) end
 
 -- ═══════════════════════════════════════════════════════
 -- 🔄 ВКЛАДКИ
 -- ═══════════════════════════════════════════════════════
 local tabs = {
-    {Name = "Консоль", Frame = ConsoleTab, Button = nil},
-    {Name = "Тест", Frame = TestTab, Button = nil},
-    {Name = "Настройки", Frame = SettingsTab, Button = nil},
+    {Name = "Консоль", Frame = ConsoleTab},
+    {Name = "Тест", Frame = TestTab},
+    {Name = "Настройки", Frame = SettingsTab},
 }
 
 local function selectTab(index)
