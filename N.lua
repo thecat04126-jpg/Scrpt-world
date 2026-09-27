@@ -1,18 +1,116 @@
 --[[
     N.lua — ESP + AUTO ACTIONS + ROUTES + DOOR WATCHER
-    Версия: 8.3 (исправлены все баги, кнопки на месте)
+    Версия: 9.0 (pre-run console + фиксы)
     Для Delta Executor
 --]]
 
-if getgenv().ESP_LOADED then
-    pcall(function()
-        if getgenv().ESP and getgenv().ESP.Destroy then
-            getgenv().ESP.Destroy()
-        end
-    end)
-    task.wait(0.3)
+-- ═══════════════════════════════════════════════════════
+-- 🖥️ PRE-RUN CONSOLE (показывается во время загрузки)
+-- ═══════════════════════════════════════════════════════
+local PreRunMessages = {}
+local PreRunFailed = false
+local PreRunError = nil
+
+local function preLog(text, color)
+    table.insert(PreRunMessages, {text = tostring(text), color = color or Color3.fromRGB(200, 200, 200)})
+    print("[PRE] " .. tostring(text))
 end
-getgenv().ESP_LOADED = true
+
+local function preFail(err)
+    PreRunFailed = true
+    PreRunError = tostring(err)
+    preLog("FATAL: " .. tostring(err), Color3.fromRGB(255, 80, 80))
+    print("[PRE] FATAL: " .. tostring(err))
+end
+
+-- Создаём pre-run GUI сразу (используем PlayerGui, не CoreGui!)
+local PlayersSvc = game:GetService("Players")
+local LPlr = PlayersSvc.LocalPlayer
+repeat task.wait() until LPlr
+local PGui = LPlr:WaitForChild("PlayerGui")
+
+local PreGui = Instance.new("ScreenGui")
+PreGui.Name = "ESP_PreRun"
+PreGui.ResetOnSpawn = false
+PreGui.IgnoreGuiInset = true
+PreGui.DisplayOrder = 100000
+PreGui.Parent = PGui
+
+local PreFrame = Instance.new("Frame")
+PreFrame.Size = UDim2.new(0, 520, 0, 280)
+PreFrame.Position = UDim2.new(0.5, -260, 0.5, -140)
+PreFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 22)
+PreFrame.BorderSizePixel = 0
+PreFrame.Parent = PreGui
+local preCorner = Instance.new("UICorner")
+preCorner.CornerRadius = UDim.new(0, 10)
+preCorner.Parent = PreFrame
+local preStroke = Instance.new("UIStroke")
+preStroke.Color = Color3.fromRGB(90, 130, 220)
+preStroke.Thickness = 2
+preStroke.Parent = PreFrame
+
+local PreTitle = Instance.new("TextLabel")
+PreTitle.Size = UDim2.new(1, -20, 0, 30)
+PreTitle.Position = UDim2.new(0, 10, 0, 8)
+PreTitle.BackgroundTransparency = 1
+PreTitle.Text = "ESP v9.0 — PRE-RUN CONSOLE"
+PreTitle.TextColor3 = Color3.fromRGB(120, 160, 255)
+PreTitle.Font = Enum.Font.GothamBold
+PreTitle.TextSize = 14
+PreTitle.TextXAlignment = Enum.TextXAlignment.Left
+PreTitle.Parent = PreFrame
+
+local PreScroll = Instance.new("ScrollingFrame")
+PreScroll.Size = UDim2.new(1, -20, 1, -50)
+PreScroll.Position = UDim2.new(0, 10, 0, 42)
+PreScroll.BackgroundColor3 = Color3.fromRGB(8, 8, 14)
+PreScroll.BorderSizePixel = 0
+PreScroll.ScrollBarThickness = 4
+PreScroll.ScrollBarImageColor3 = Color3.fromRGB(90, 130, 220)
+PreScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+PreScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+PreScroll.Parent = PreFrame
+local preScrollCorner = Instance.new("UICorner")
+preScrollCorner.CornerRadius = UDim.new(0, 6)
+preScrollCorner.Parent = PreScroll
+
+local PreLayout = Instance.new("UIListLayout")
+PreLayout.Padding = UDim.new(0, 2)
+PreLayout.SortOrder = Enum.SortOrder.LayoutOrder
+PreLayout.Parent = PreScroll
+
+local preLabelCount = 0
+local function preRender()
+    -- Очистить
+    for _, ch in ipairs(PreScroll:GetChildren()) do
+        if ch:IsA("TextLabel") then ch:Destroy() end
+    end
+    preLabelCount = 0
+    for i, msg in ipairs(PreRunMessages) do
+        local l = Instance.new("TextLabel")
+        l.Size = UDim2.new(1, -8, 0, 18)
+        l.BackgroundTransparency = 1
+        l.Text = "> " .. msg.text
+        l.TextColor3 = msg.color
+        l.Font = Enum.Font.Code
+        l.TextSize = 12
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.LayoutOrder = i
+        l.Parent = PreScroll
+        preLabelCount = preLabelCount + 1
+    end
+    PreScroll.CanvasSize = UDim2.new(0, 0, 0, preLabelCount * 20)
+end
+
+preLog("Pre-run console initialized", Color3.fromRGB(100, 200, 255))
+
+-- ═══════════════════════════════════════════════════════
+-- ОСНОВНАЯ ЗАГРУЗКА (в pcall)
+-- ═══════════════════════════════════════════════════════
+local MainOk, MainErr = pcall(function()
+
+preLog("Loading services...")
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,7 +120,22 @@ local CoreGui = game:GetService("CoreGui")
 local GuiService = game:GetService("GuiService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
+
+preLog("Waiting for camera...")
 local Camera = workspace.CurrentCamera
+local camWait = 0
+while not Camera and camWait < 10 do
+    task.wait(0.1)
+    Camera = workspace.CurrentCamera
+    camWait = camWait + 0.1
+end
+if not Camera then
+    preFail("Camera not found")
+    error("Camera not found")
+end
+preLog("Camera OK", Color3.fromRGB(100, 255, 100))
+
+preLog("Creating theme...")
 
 -- ═══════════════════════════════════════════════════════
 -- 🎨 ТЕМА
@@ -118,6 +231,8 @@ local IgnoredPlayers = {}
 local Queue = {}
 local CurrentTarget = nil
 
+preLog("Settings OK", Color3.fromRGB(100, 255, 100))
+
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
 -- ═══════════════════════════════════════════════════════
@@ -198,13 +313,14 @@ end
 -- ═══════════════════════════════════════════════════════
 -- 🎯 ИНДИКАТОР КЛИКА
 -- ═══════════════════════════════════════════════════════
+preLog("Creating ClickIndicator...")
+
 local ClickIndicatorGui = Instance.new("ScreenGui")
 ClickIndicatorGui.Name = "ESP_ClickIndicator"
 ClickIndicatorGui.ResetOnSpawn = false
 ClickIndicatorGui.IgnoreGuiInset = true
 ClickIndicatorGui.DisplayOrder = 9999
-pcall(function() ClickIndicatorGui.Parent = CoreGui end)
-if not ClickIndicatorGui.Parent then ClickIndicatorGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+ClickIndicatorGui.Parent = PGui
 
 local function showClickIndicator(x, y)
     if not Settings.ShowClickIndicator then return end
@@ -536,12 +652,13 @@ end
 -- ═══════════════════════════════════════════════════════
 -- 🖥️ ГЛАВНОЕ ОКНО
 -- ═══════════════════════════════════════════════════════
+preLog("Creating Main UI...")
+
 local MainGui = Instance.new("ScreenGui")
 MainGui.Name = "ESP_MainUI"
 MainGui.ResetOnSpawn = false
 MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-pcall(function() MainGui.Parent = CoreGui end)
-if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+MainGui.Parent = PGui
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 480, 0, 420)
@@ -580,7 +697,7 @@ TitleIcon.TextXAlignment = Enum.TextXAlignment.Left
 TitleIcon.Parent = TitleBar
 
 local Title = Instance.new("TextLabel")
-Title.Text = "ESP + AUTO ACTIONS v8.3"
+Title.Text = "ESP + AUTO ACTIONS v9.0"
 Title.Size = UDim2.new(1, -150, 1, 0)
 Title.Position = UDim2.new(0, 60, 0, 0)
 Title.BackgroundTransparency = 1
@@ -680,6 +797,8 @@ SettingsTab.Parent = ContentFrame
 local SettingsLayout = Instance.new("UIListLayout")
 SettingsLayout.Padding = UDim.new(0, 6)
 SettingsLayout.Parent = SettingsTab
+
+preLog("Main UI OK", Color3.fromRGB(100, 255, 100))
 
 -- ═══════════════════════════════════════════════════════
 -- 🧱 UI-КОМПОНЕНТЫ
@@ -813,14 +932,15 @@ end
 -- ═══════════════════════════════════════════════════════
 -- 🎯 ПРИЦЕЛ
 -- ═══════════════════════════════════════════════════════
+preLog("Creating Crosshair...")
+
 local CrosshairGui = Instance.new("ScreenGui")
 CrosshairGui.Name = "ESP_Crosshair"
 CrosshairGui.ResetOnSpawn = false
 CrosshairGui.IgnoreGuiInset = true
 CrosshairGui.DisplayOrder = 999
 CrosshairGui.Enabled = false
-pcall(function() CrosshairGui.Parent = CoreGui end)
-if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+CrosshairGui.Parent = PGui
 
 local CrossHandle = Instance.new("TextButton")
 CrossHandle.Size = UDim2.new(0, 80, 0, 80)
@@ -936,11 +1056,11 @@ SelectBtn.AutoButtonColor = false
 SelectBtn.Parent = CrossPanel
 addCorner(SelectBtn, 8)
 
--- ✅ ВАЖНО: объявляем переменные ЗАРАНЕЕ, чтобы замыкания их видели
+-- ВАЖНО: объявляем переменные ЗАРАНЕЕ
 local currentPickKey = nil
 local currentPickName = nil
 local refreshButtonLabels = function() end
-local openCrosshairPicker -- объявляем, значение присвоим позже
+local openCrosshairPicker
 
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then return end
@@ -957,7 +1077,6 @@ SelectBtn.MouseButton1Click:Connect(function()
     currentPickName = nil
 end)
 
--- ✅ присваиваем значение (замыкание уже видит переменную)
 openCrosshairPicker = function(key, displayName)
     currentPickKey = key
     currentPickName = displayName
@@ -976,9 +1095,13 @@ RunService.RenderStepped:Connect(function()
         Settings.CrosshairOffsetX or 0, Settings.CrosshairOffsetY or 0)
 end)
 
+preLog("Crosshair OK", Color3.fromRGB(100, 255, 100))
+
 -- ═══════════════════════════════════════════════════════
 -- 🎨 ESP
 -- ═══════════════════════════════════════════════════════
+preLog("Creating ESP system...")
+
 local function createESP(player)
     if player == LocalPlayer then return end
     if ESPCache[player] then return end
@@ -1111,6 +1234,8 @@ local function clearPlayerStatus(player)
     setPlayerStatus(player, "", nil)
 end
 
+preLog("ESP system OK", Color3.fromRGB(100, 255, 100))
+
 -- ═══════════════════════════════════════════════════════
 -- 📋 ВКЛАДКА "ТЕСТ"
 -- ═══════════════════════════════════════════════════════
@@ -1238,7 +1363,6 @@ local function makeButtonSetter(name, key)
     addCorner(btn, 6)
 
     btn.MouseButton1Click:Connect(function()
-        -- ✅ openCrosshairPicker уже объявлена заранее
         if openCrosshairPicker then
             openCrosshairPicker(key, name)
         end
@@ -1247,7 +1371,6 @@ local function makeButtonSetter(name, key)
     buttonLabelRefs[key] = {btn = btn, name = name}
 end
 
--- ✅ переопределяем refreshButtonLabels (объявлена ранее как пустая функция)
 refreshButtonLabels = function()
     for key, ref in pairs(buttonLabelRefs) do
         if ref and ref.btn then
@@ -1336,6 +1459,8 @@ makeToggle(SettingsTab, "Show health", Settings.ShowHealth, function(v) Settings
 makeToggle(SettingsTab, "Show distance", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
 makeToggle(SettingsTab, "Show status", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
 makeToggle(SettingsTab, "Show highlight", Settings.ShowHighlight, function(v) Settings.ShowHighlight = v end)
+
+preLog("All tabs created", Color3.fromRGB(100, 255, 100))
 
 -- ═══════════════════════════════════════════════════════
 -- 🔄 ОСНОВНОЙ ЦИКЛ
@@ -1650,6 +1775,7 @@ getgenv().ESP = {
         pcall(function() MainGui:Destroy() end)
         pcall(function() CrosshairGui:Destroy() end)
         pcall(function() ClickIndicatorGui:Destroy() end)
+        pcall(function() PreGui:Destroy() end)
         getgenv().ESP_LOADED = false
     end,
 }
@@ -1662,6 +1788,37 @@ getgenv().HideUI = function()
     CrosshairGui.Enabled = false
 end
 
-log("Script v8.3 loaded!", Theme.Success)
+log("Script v9.0 loaded!", Theme.Success)
 log("Settings -> BUTTON COORDS for coordinates", Theme.Warning)
 log("Crosshair: press Select", Theme.Warning)
+
+preLog("Main script loaded successfully", Color3.fromRGB(0, 255, 100))
+
+end) -- конец pcall
+
+-- ═══════════════════════════════════════════════════════
+-- 🖥️ PRE-RUN: обновляем и показываем результат
+-- ═══════════════════════════════════════════════════════
+if not MainOk then
+    preFail(MainErr)
+end
+
+preRender()
+
+if PreRunFailed then
+    -- Оставляем консоль с красным фоном
+    PreFrame.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
+    preStroke.Color = Color3.fromRGB(255, 60, 60)
+    PreTitle.Text = "ESP v9.0 — PRE-RUN FAILED"
+    PreTitle.TextColor3 = Color3.fromRGB(255, 80, 80)
+    PreLog = nil
+    print("[ESP] SCRIPT FAILED: " .. tostring(PreRunError))
+else
+    -- Успех: показываем "OK" и исчезаем через 1.5 сек
+    preLog("SUCCESS — closing in 1.5s", Color3.fromRGB(0, 255, 100))
+    preRender()
+    task.spawn(function()
+        task.wait(1.5)
+        pcall(function() PreGui:Destroy() end)
+    end)
+end
