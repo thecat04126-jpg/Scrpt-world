@@ -1,8 +1,19 @@
 --[[
     PLAYERS ESP + AUTO ACTIONS + UI
-    Версия: 3.3 (финальная)
+    Версия: 3.4
     Для Delta Executor
 --]]
+
+-- Защита от двойного запуска
+if getgenv().ESP_LOADED then
+    pcall(function()
+        if getgenv().ESP and getgenv().ESP.Destroy then
+            getgenv().ESP.Destroy()
+        end
+    end)
+    task.wait(0.3)
+end
+getgenv().ESP_LOADED = true
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -33,6 +44,7 @@ local Theme = {
 -- ⚙️ НАСТРОЙКИ
 -- ═══════════════════════════════════════════════════════
 local Settings = {
+    -- ESP
     Enabled = true,
     ShowName = true,
     ShowHealth = true,
@@ -44,6 +56,7 @@ local Settings = {
     TextSize = 14,
     HeadOffset = 3,
 
+    -- Автодействия
     AutoActions = false,
     TriggerRadius = 100,
     ApproachThreshold = 10,
@@ -56,6 +69,7 @@ local Settings = {
     WaitBeforeDeactivate = 3,
     WaitLeftWithoutApproach = 5,
 
+    -- Координаты кнопок
     Buttons = {
         Activate = nil,
         GiveTicket = nil,
@@ -63,6 +77,7 @@ local Settings = {
         Deactivate = nil,
     },
 
+    -- Прицел
     CrosshairColor = Color3.fromRGB(0, 255, 100),
 }
 
@@ -71,7 +86,7 @@ local CurrentTarget = nil
 local ActionState = "idle"
 local StateTimer = 0
 local InitialDistance = 0
-local ProcessedPlayers = {}     -- защита от повторной обработки
+local ProcessedPlayers = {}
 
 -- ═══════════════════════════════════════════════════════
 -- 🔧 ХЕЛПЕРЫ
@@ -122,9 +137,9 @@ local function makeDraggable(frame, handle)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ЛОГ (объявлен ДО использования)
+-- 📋 ЛОГ
 -- ═══════════════════════════════════════════════════════
-local ConsoleTab  -- объявим заранее, заполним позже
+local ConsoleTab
 
 local function log(text, color)
     if not ConsoleTab then
@@ -154,39 +169,47 @@ end
 -- 🔍 ПОИСК КНОПКИ ПО КООРДИНАТАМ
 -- ═══════════════════════════════════════════════════════
 local function findButtonAtPosition(x, y)
-    local candidates = {}
+    local allFound = {}
+
+    local function scanGui(gui)
+        pcall(function()
+            if not gui:IsA("ScreenGui") or not gui.Enabled then return end
+            local objs = gui:GetGuiObjectsAtPosition(x, y)
+            for _, o in pairs(objs) do
+                table.insert(allFound, o)
+                local p = o.Parent
+                while p and p ~= game do
+                    if p:IsA("GuiButton") then
+                        table.insert(allFound, p)
+                    end
+                    p = p.Parent
+                end
+            end
+        end)
+    end
 
     pcall(function()
         for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Enabled then
-                local objs = gui:GetGuiObjectsAtPosition(x, y)
-                for _, o in pairs(objs) do
-                    table.insert(candidates, o)
-                end
-            end
+            scanGui(gui)
         end
     end)
 
     pcall(function()
         for _, gui in pairs(CoreGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Enabled then
-                local objs = gui:GetGuiObjectsAtPosition(x, y)
-                for _, o in pairs(objs) do
-                    table.insert(candidates, o)
-                end
-            end
+            scanGui(gui)
         end
     end)
 
-    for _, obj in ipairs(candidates) do
-        if obj:IsA("GuiButton") then return obj end
-        local p = obj.Parent
-        while p and p ~= game do
-            if p:IsA("GuiButton") then return p end
-            p = p.Parent
+    -- Приоритет: кнопка с наибольшим ZIndex
+    local best = nil
+    for _, obj in ipairs(allFound) do
+        if obj:IsA("GuiButton") and obj.Visible then
+            if not best or (obj.ZIndex or 0) >= (best.ZIndex or 0) then
+                best = obj
+            end
         end
     end
-    return nil
+    return best
 end
 
 -- ═══════════════════════════════════════════════════════
@@ -194,58 +217,111 @@ end
 -- ═══════════════════════════════════════════════════════
 local function simulateClick(button, x, y)
     if not button then return false end
+    local center = button.AbsolutePosition + button.AbsoluteSize / 2
 
-    -- Метод 1: событие
+    pcall(function() button.Activated:Fire() end)
     pcall(function() button.MouseButton1Click:Fire() end)
-
-    -- Метод 2: MouseDown/Up события
     pcall(function()
-        button.MouseButton1Down:Fire(x or 0, y or 0)
-        button.MouseButton1Up:Fire(x or 0, y or 0)
+        button.MouseButton1Down:Fire(x or center.X, y or center.Y)
+        button.MouseButton1Up:Fire(x or center.X, y or center.Y)
     end)
-
-    -- Метод 3: Activate
+    pcall(function()
+        local fakeInput = {
+            UserInputType = Enum.UserInputType.MouseButton1,
+            Position = Vector3.new(center.X, center.Y, 0),
+            KeyCode = Enum.KeyCode.Unknown,
+            UserInputState = Enum.UserInputState.Begin,
+        }
+        button.InputBegan:Fire(fakeInput)
+        button.InputChanged:Fire(fakeInput)
+        fakeInput.UserInputState = Enum.UserInputState.End
+        button.InputEnded:Fire(fakeInput)
+    end)
     pcall(function()
         if button.Activate then button:Activate() end
     end)
-
-    -- Метод 4: РЕАЛЬНАЯ эмуляция через VirtualInputManager
+    pcall(function()
+        if button.Select then button:Select() end
+    end)
     pcall(function()
         local VIM = game:GetService("VirtualInputManager")
-        local center = button.AbsolutePosition + button.AbsoluteSize / 2
         VIM:SendMouseMoveEvent(center, false)
-        task.wait(0.03)
+        task.wait(0.02)
         VIM:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
         task.wait(0.05)
         VIM:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
+    end)
+    -- Delta-специфичные функции
+    pcall(function()
+        if typeof(mousemoverel) == "function" and typeof(mouse1click) == "function" then
+            mousemoverel(center.X, center.Y)
+            task.wait(0.02)
+            mouse1click()
+        end
     end)
 
     return true
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 ВЫПОЛНЕНИЕ ДЕЙСТВИЯ (объявлено ДО использования)
+-- 🎯 ВЫПОЛНЕНИЕ ДЕЙСТВИЯ
 -- ═══════════════════════════════════════════════════════
+local function resolvePath(path)
+    if not path or path == "" then return nil end
+    local parts = {}
+    for part in string.gmatch(path, "[^%.]+") do
+        table.insert(parts, part)
+    end
+
+    local obj = LocalPlayer.PlayerGui
+    for _, part in ipairs(parts) do
+        if not obj then break end
+        obj = obj:FindFirstChild(part)
+    end
+    if obj then return obj end
+
+    obj = CoreGui
+    for _, part in ipairs(parts) do
+        if not obj then break end
+        obj = obj:FindFirstChild(part)
+    end
+    return obj
+end
+
 function fireButtonAction(btnData)
     if not btnData then return false end
 
-    -- Приоритет: координаты
+    if btnData.Path then
+        local obj = resolvePath(btnData.Path)
+        if obj and obj:IsA("GuiButton") then
+            simulateClick(obj)
+            log("✓ Клик по пути: " .. obj.Name, Theme.Success)
+            return true
+        end
+    end
+
     if btnData.Pos then
         local x, y = btnData.Pos.X, btnData.Pos.Y
         local button = findButtonAtPosition(x, y)
         if button then
             simulateClick(button, x, y)
-            log("✓ Клик: " .. button.Name .. " (" .. button.ClassName .. ")", Theme.Success)
+            log("✓ Клик по координатам: " .. button.Name, Theme.Success)
             return true
         end
-        -- Кнопка не найдена — пробуем просто кликнуть в точку
         pcall(function()
             local VIM = game:GetService("VirtualInputManager")
             VIM:SendMouseButtonEvent(x, y, 0, true, game, 1)
             task.wait(0.05)
             VIM:SendMouseButtonEvent(x, y, 0, false, game, 1)
         end)
-        log("⚠ Кнопка не найдена — клик в точку X=" .. x .. ", Y=" .. y, Theme.Warning)
+        pcall(function()
+            if typeof(mousemoverel) == "function" and typeof(mouse1click) == "function" then
+                mousemoverel(x, y)
+                task.wait(0.02)
+                mouse1click()
+            end
+        end)
+        log("⚠ Кнопка не найдена — клик в точку", Theme.Warning)
         return false
     end
 
@@ -369,6 +445,7 @@ ConsoleLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ConsoleLayout.Parent = ConsoleTab
 
 log("Консоль инициализирована", Theme.TextDim)
+log("Загрузка...", Theme.TextDim)
 
 -- Тест
 local TestTab = Instance.new("ScrollingFrame")
@@ -378,7 +455,7 @@ TestTab.BackgroundTransparency = 1
 TestTab.BorderSizePixel = 0
 TestTab.ScrollBarThickness = 5
 TestTab.ScrollBarImageColor3 = Theme.Accent
-TestTab.CanvasSize = UDim2.new(0, 0, 0, 400)
+TestTab.CanvasSize = UDim2.new(0, 0, 0, 500)
 TestTab.Visible = false
 TestTab.Parent = ContentFrame
 
@@ -533,19 +610,19 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🎯 ПРИЦЕЛ (крест отдельно, окно отдельно)
+-- 🎯 ПРИЦЕЛ
 -- ═══════════════════════════════════════════════════════
 local CrosshairGui = Instance.new("ScreenGui")
 CrosshairGui.Name = "ESP_Crosshair"
 CrosshairGui.ResetOnSpawn = false
 CrosshairGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-CrosshairGui.IgnoreGuiInset = true
+CrosshairGui.IgnoreGuiInset = false
 CrosshairGui.DisplayOrder = 999
 CrosshairGui.Enabled = false
 pcall(function() CrosshairGui.Parent = CoreGui end)
 if not CrosshairGui.Parent then CrosshairGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
--- ─── Крест ───
+-- Крест
 local CrossHandle = Instance.new("TextButton")
 CrossHandle.Name = "CrossHandle"
 CrossHandle.Size = UDim2.new(0, 80, 0, 80)
@@ -580,7 +657,6 @@ CrossDot.ZIndex = 101
 CrossDot.Parent = CrossHandle
 addCorner(CrossDot, 4)
 
--- Обводки для видимости
 local dotStroke = Instance.new("UIStroke")
 dotStroke.Color = Color3.fromRGB(0, 0, 0)
 dotStroke.Thickness = 2
@@ -624,7 +700,7 @@ CrossHandle.InputEnded:Connect(function(input)
     end
 end)
 
--- ─── Панель управления ───
+-- Панель
 local CrossPanel = Instance.new("Frame")
 CrossPanel.Size = UDim2.new(0, 320, 0, 110)
 CrossPanel.Position = UDim2.new(0.5, -160, 1, -130)
@@ -683,14 +759,19 @@ SelectBtn.MouseLeave:Connect(function()
     }):Play()
 end)
 
+-- Точный центр креста
+local function getCrossCenter()
+    local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
+    return math.floor(pos.X), math.floor(pos.Y)
+end
+
 local currentPickKey = nil
 local currentPickName = nil
 
--- Обновление координат в реальном времени
 RunService.RenderStepped:Connect(function()
     if not CrosshairGui.Enabled then return end
-    local center = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
-    CoordLabel.Text = string.format("X: %d   Y: %d", center.X, center.Y)
+    local x, y = getCrossCenter()
+    CoordLabel.Text = string.format("X: %d   Y: %d", x, y)
 end)
 
 local function openCrosshairPicker(key, displayName)
@@ -703,16 +784,13 @@ local function openCrosshairPicker(key, displayName)
     log("🎯 Перетащи крест на кнопку и жми «Выбрать»", Theme.Warning)
 end
 
--- Сохранение
 SelectBtn.MouseButton1Click:Connect(function()
     if not currentPickKey then
         log("❌ Не выбрана цель", Theme.Danger)
         return
     end
 
-    local center = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
-    local x = math.floor(center.X)
-    local y = math.floor(center.Y)
+    local x, y = getCrossCenter()
 
     local foundButton = findButtonAtPosition(x, y)
     local path = nil
@@ -726,7 +804,7 @@ SelectBtn.MouseButton1Click:Connect(function()
         if #parts > 0 then path = table.concat(parts, ".") end
         log("✓ Найдена кнопка: " .. foundButton.Name, Theme.Success)
     else
-        log("⚠ Кнопка не найдена — сохранены координаты", Theme.Warning)
+        log("⚠ Кнопка не найдена — только координаты", Theme.Warning)
     end
 
     Settings.Buttons[currentPickKey] = {
@@ -801,6 +879,52 @@ makeTestBtn("⏹  Деактивировать", function()
         log("❌ Координаты не заданы", Theme.Danger)
     end
 end)
+
+-- 🔍 Отладка: что под координатами
+makeTestBtn("🔍 Что под координатами «Активировать»?", function()
+    local data = Settings.Buttons.Activate
+    if not data or not data.Pos then
+        log("❌ Координаты не заданы", Theme.Danger)
+        return
+    end
+    local x, y = data.Pos.X, data.Pos.Y
+    log("Проверяем X=" .. x .. ", Y=" .. y, Theme.Warning)
+
+    local allObjs = {}
+    pcall(function()
+        for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled then
+                for _, o in pairs(gui:GetGuiObjectsAtPosition(x, y)) do
+                    table.insert(allObjs, o)
+                end
+            end
+        end
+    end)
+    pcall(function()
+        for _, gui in pairs(CoreGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled then
+                for _, o in pairs(gui:GetGuiObjectsAtPosition(x, y)) do
+                    table.insert(allObjs, o)
+                end
+            end
+        end
+    end)
+
+    if #allObjs == 0 then
+        log("❌ Под точкой НЕТ GUI — сдвинь крест точнее", Theme.Danger)
+    else
+        for _, o in ipairs(allObjs) do
+            log("• " .. o.ClassName .. " [" .. o.Name .. "]", Theme.Text)
+        end
+    end
+
+    local btn = findButtonAtPosition(x, y)
+    if btn then
+        log("✓ Найдена кнопка: " .. btn.Name, Theme.Success)
+    else
+        log("❌ GuiButton не найден под точкой", Theme.Danger)
+    end
+end, Color3.fromRGB(140, 100, 200))
 
 makeTestBtn("🔄 Сбросить состояние", function()
     ActionState = "idle"
@@ -1031,7 +1155,7 @@ RunService.RenderStepped:Connect(function(dt)
                         StateTimer = 0
                         ProcessedPlayers[p] = true
                         log("👤 Обнаружен: " .. p.Name .. " (" .. math.floor(d) .. "м)", Theme.Warning)
-                        if Settings.DoActivate then
+                        if Settings.DoActivate and Settings.Buttons.Activate then
                             fireButtonAction(Settings.Buttons.Activate)
                             log("▶ Активировать", Theme.Accent)
                         end
@@ -1048,7 +1172,7 @@ RunService.RenderStepped:Connect(function(dt)
                 local d = (Camera.CFrame.Position - hrp.Position).Magnitude
                 if d < InitialDistance - Settings.ApproachThreshold then
                     log("👣 " .. CurrentTarget.Name .. " подошёл", Theme.Success)
-                    if Settings.DoGiveTicket then
+                    if Settings.DoGiveTicket and Settings.Buttons.GiveTicket then
                         fireButtonAction(Settings.Buttons.GiveTicket)
                         log("🎫 Выдать билет", Theme.Accent)
                     end
@@ -1065,14 +1189,14 @@ RunService.RenderStepped:Connect(function(dt)
             end
         end
     elseif ActionState == "checkWeapon" and StateTimer >= Settings.WaitBeforeCheck then
-        if Settings.DoCheckWeapon then
+        if Settings.DoCheckWeapon and Settings.Buttons.CheckWeapon then
             fireButtonAction(Settings.Buttons.CheckWeapon)
             log("🔫 Проверить оружие", Theme.Accent)
         end
         ActionState = "deactivate"
         StateTimer = 0
     elseif ActionState == "deactivate" and StateTimer >= Settings.WaitBeforeDeactivate then
-        if Settings.DoDeactivate then
+        if Settings.DoDeactivate and Settings.Buttons.Deactivate then
             fireButtonAction(Settings.Buttons.Deactivate)
             log("⏹ Деактивировать", Theme.Accent)
         end
@@ -1080,7 +1204,7 @@ RunService.RenderStepped:Connect(function(dt)
         CurrentTarget = nil
         StateTimer = 0
     elseif ActionState == "waitLeft" and StateTimer >= Settings.WaitLeftWithoutApproach then
-        if Settings.DoDeactivate then
+        if Settings.DoDeactivate and Settings.Buttons.Deactivate then
             fireButtonAction(Settings.Buttons.Deactivate)
             log("⏹ Деактивировать (ушёл)", Theme.Accent)
         end
@@ -1099,6 +1223,15 @@ Players.PlayerRemoving:Connect(function(player)
     ProcessedPlayers[player] = nil
 end)
 for _, p in pairs(Players:GetPlayers()) do createESP(p) end
+
+-- Сброс обработанных при смерти персонажа
+local function hookCharacter(player)
+    player.CharacterAdded:Connect(function()
+        ProcessedPlayers[player] = nil
+    end)
+end
+for _, p in pairs(Players:GetPlayers()) do hookCharacter(p) end
+Players.PlayerAdded:Connect(hookCharacter)
 
 -- ═══════════════════════════════════════════════════════
 -- 🔄 ВКЛАДКИ
@@ -1167,8 +1300,9 @@ getgenv().ESP = {
     Toggle = function() Settings.Enabled = not Settings.Enabled end,
     Destroy = function()
         for p, _ in pairs(ESPCache) do removeESP(p) end
-        MainGui:Destroy()
-        CrosshairGui:Destroy()
+        pcall(function() MainGui:Destroy() end)
+        pcall(function() CrosshairGui:Destroy() end)
+        getgenv().ESP_LOADED = false
     end,
 }
 
