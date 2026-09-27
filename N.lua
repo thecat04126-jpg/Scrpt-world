@@ -1,6 +1,6 @@
 --[[
     N.lua — ESP + AUTO ACTIONS + ROUTES + DOOR WATCHER
-    Версия: 7.1 (сдвиг X/Y + Home Position + Door Watch)
+    Версия: 8.0 (правильный ESP с обводкой + статусом)
     Для Delta Executor
 --]]
 
@@ -39,6 +39,8 @@ local Theme = {
     Text        = Color3.fromRGB(240, 240, 245),
     TextDim     = Color3.fromRGB(150, 150, 165),
     Border      = Color3.fromRGB(60, 60, 80),
+    BoxColor    = Color3.fromRGB(0, 255, 100),
+    BoxFillCol  = Color3.fromRGB(0, 255, 100),
     PathLine    = Color3.fromRGB(0, 220, 100),
     StopMark    = Color3.fromRGB(255, 80, 80),
     DoorMark    = Color3.fromRGB(255, 200, 80),
@@ -48,18 +50,24 @@ local Theme = {
 -- ⚙️ НАСТРОЙКИ
 -- ═══════════════════════════════════════════════════════
 local Settings = {
+    -- ESP
     Enabled = true,
     ShowName = true,
     ShowHealth = true,
     ShowDistance = true,
     ShowStatus = true,
+    ShowBox = true,             -- обводка
+    ShowHighlight = true,       -- подсветка (Highlight)
     TeamCheck = false,
     MaxDistance = 1000,
     NameColor = Color3.fromRGB(255, 255, 255),
     HealthColor = Color3.fromRGB(0, 255, 0),
+    BoxColor = Color3.fromRGB(0, 255, 100),
+    HighlightColor = Color3.fromRGB(255, 0, 0),
     TextSize = 14,
     HeadOffset = 3,
 
+    -- Автодействия
     AutoActions = false,
     TriggerRadius = 100,
     ApproachThreshold = 10,
@@ -74,6 +82,7 @@ local Settings = {
     QueueDelay = 5,
     IgnoreDuration = 40,
 
+    -- Кнопки
     Buttons = {
         Activate = nil,
         GiveTicket = nil,
@@ -82,14 +91,15 @@ local Settings = {
         NumberUp = nil,
     },
 
+    -- Прицел
     CrosshairColor = Color3.fromRGB(0, 255, 100),
     ShowClickIndicator = true,
-    CrosshairOffsetY = 0,       -- сдвиг по Y
-    CrosshairOffsetX = 0,       -- ⬅️ НОВОЕ: сдвиг по X (например -50)
+    CrosshairOffsetY = 0,
+    CrosshairOffsetX = 0,
 }
 
 -- ═══════════════════════════════════════════════════════
--- 🚪 НАСТРОЙКИ МАРШРУТА + HOME POSITION
+-- 🚪 МАРШРУТ + WATCHER
 -- ═══════════════════════════════════════════════════════
 local RouteSettings = {
     DoorName = "RoomExit",
@@ -99,12 +109,7 @@ local RouteSettings = {
     StopLeftOffset = 3,
     StopBackOffset = 2,
     StopHeightOffset = 3,
-    AutoNextRoom = false,
-
-    -- Home Position — исходная точка (задаётся в настройках)
-    HomePosition = nil,         -- Vector3 или nil
-
-    -- Watcher дверей
+    HomePosition = nil,
     WatchDoors = true,
     DoorRotationThreshold = 5,
     DoorMoveThreshold = 1,
@@ -238,12 +243,12 @@ local function showClickIndicator(x, y)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🖱️ ТОЧНЫЙ ТАП (с учётом сдвигов X и Y)
+-- 🖱️ ТАП (с учётом X/Y сдвигов)
 -- ═══════════════════════════════════════════════════════
 local function clickAtScreenPosition(x, y)
     if not x or not y then return false end
     local topInset = GuiService:GetGuiInset().Y
-    local realX = x + (Settings.CrosshairOffsetX or 0)   -- ⬅️ СДВИГ ПО X
+    local realX = x + (Settings.CrosshairOffsetX or 0)
     local realY = y + topInset + (Settings.CrosshairOffsetY or 0)
     showClickIndicator(realX, realY)
 
@@ -299,7 +304,6 @@ local function tryClickGuiButton(button)
     if not button or not button:IsA("GuiButton") then return false end
 
     log("🖱 Пробую нажать: " .. button.ClassName .. " [" .. button.Name .. "]", Theme.Warning)
-
     local pos = button.AbsolutePosition + button.AbsoluteSize / 2
 
     pcall(function() button.Activated:Fire() end)
@@ -316,7 +320,6 @@ local function tryClickGuiButton(button)
     pcall(function() if button.Select then button:Select() end end)
     task.wait(0.1)
 
-    -- VirtualInput
     pcall(function()
         local topInset = GuiService:GetGuiInset().Y
         local rx = pos.X + (Settings.CrosshairOffsetX or 0)
@@ -326,7 +329,6 @@ local function tryClickGuiButton(button)
         VirtualInputManager:SendMouseButtonEvent(rx, ry, 0, false, game, 1)
     end)
 
-    -- tap/touch
     pcall(function()
         local topInset = GuiService:GetGuiInset().Y
         local rx = pos.X + (Settings.CrosshairOffsetX or 0)
@@ -335,7 +337,6 @@ local function tryClickGuiButton(button)
         elseif typeof(touch) == "function" then touch(rx, ry) end
     end)
 
-    -- Ищем RemoteEvent внутри
     pcall(function()
         for _, child in ipairs(button:GetDescendants()) do
             if child:IsA("RemoteEvent") then
@@ -348,69 +349,48 @@ local function tryClickGuiButton(button)
     return true
 end
 
--- ═══════════════════════════════════════════════════════
--- 🔍 ПОИСК КНОПКИ ПО ИМЕНИ (для NumberUp)
--- ═══════════════════════════════════════════════════════
 local function findButtonByName(namePattern)
     local found = {}
-
     local function scanGui(gui)
         pcall(function()
             if not gui:IsA("ScreenGui") then return end
             for _, desc in ipairs(gui:GetDescendants()) do
-                if desc:IsA("GuiButton") then
-                    local n = desc.Name:lower()
-                    if n:find(namePattern:lower(), 1, true) then
-                        table.insert(found, desc)
-                    end
+                if desc:IsA("GuiButton") and desc.Name:lower():find(namePattern:lower(), 1, true) then
+                    table.insert(found, desc)
                 end
             end
         end)
     end
-
     pcall(function()
-        for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
-            scanGui(gui)
-        end
+        for _, gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do scanGui(gui) end
     end)
     pcall(function()
-        for _, gui in ipairs(CoreGui:GetChildren()) do
-            scanGui(gui)
-        end
+        for _, gui in ipairs(CoreGui:GetChildren()) do scanGui(gui) end
     end)
-
     return found
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🚪 ПОИСК ДВЕРЕЙ
+-- 🚪 ДВЕРИ
 -- ═══════════════════════════════════════════════════════
 local function findDoors()
     Doors = {}
     local count = 0
-
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj.Name == RouteSettings.DoorName
            and (obj:IsA("BasePart") or obj:IsA("MeshPart")) then
             local fullPath = obj:GetFullName()
             local roomNum = tonumber(fullPath:match("Hotel%.(%d+)%."))
-
             if roomNum then
                 Doors[roomNum] = {
-                    Instance = obj,
-                    Position = obj.Position,
-                    CFrame = obj.CFrame,
-                    FullPath = fullPath,
+                    Instance = obj, Position = obj.Position,
+                    CFrame = obj.CFrame, FullPath = fullPath,
                 }
                 count = count + 1
             end
         end
     end
     return count
-end
-
-local function getDoor(roomNum)
-    return Doors[roomNum]
 end
 
 local function calculateStopPoint(door)
@@ -450,6 +430,33 @@ local function teleportAlongPath(path)
     return true
 end
 
+function goToRoom(roomNum)
+    roomNum = roomNum or RouteSettings.CurrentRoom
+    if next(Doors) == nil then
+        local c = findDoors()
+        log("🔍 Найдено дверей: " .. c, Theme.Success)
+    end
+    local door = Doors[roomNum]
+    if not door then
+        log("❌ Дверь комнаты " .. roomNum .. " не найдена", Theme.Danger)
+        return false
+    end
+    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return false end
+    local stopPos = calculateStopPoint(door)
+    log("🚪 Едем к комнате " .. roomNum, Theme.Warning)
+    local path = buildPath(myHRP.Position, stopPos)
+    teleportAlongPath(path)
+    log("✅ Достигли комнаты " .. roomNum, Theme.Success)
+    return true
+end
+
+function goToNextRoom()
+    RouteSettings.CurrentRoom = RouteSettings.CurrentRoom + 1
+    log("➡ Комната: " .. RouteSettings.CurrentRoom, Theme.Warning)
+    return goToRoom(RouteSettings.CurrentRoom)
+end
+
 -- ═══════════════════════════════════════════════════════
 -- 👁️ WATCHER ДВЕРЕЙ
 -- ═══════════════════════════════════════════════════════
@@ -459,7 +466,6 @@ local function initDoorWatcher()
     for num, door in pairs(Doors) do
         if door.Instance and door.Instance.Parent then
             DoorWatcherData[door.Instance] = {
-                CFrame = door.Instance.CFrame,
                 Position = door.Instance.Position,
                 Rotation = door.Instance.Orientation,
                 RoomNum = num,
@@ -467,21 +473,17 @@ local function initDoorWatcher()
             count = count + 1
         end
     end
-    log("👁️ Watcher инициализирован для " .. count .. " дверей", Theme.Success)
+    log("👁️ Watcher активен для " .. count .. " дверей", Theme.Success)
 end
 
--- Что делать при открытии двери
-local function onDoorOpened(roomNum, doorInstance)
+local function onDoorOpened(roomNum)
     local now = tick()
-    if doorOpenHandled[roomNum] and now - doorOpenHandled[roomNum] < 3 then
-        return
-    end
+    if doorOpenHandled[roomNum] and now - doorOpenHandled[roomNum] < 3 then return end
     doorOpenHandled[roomNum] = now
 
-    log("🚪 ДВЕРЬ " .. roomNum .. " ОТКРЫЛАСЬ! Пробую NumberUp", Theme.Success)
+    log("🚪 ДВЕРЬ " .. roomNum .. " ОТКРЫЛАСЬ! NumberUp", Theme.Success)
 
     task.spawn(function()
-        -- Способ 1: по сохранённым координатам
         if Settings.Buttons.NumberUp and Settings.Buttons.NumberUp.Pos then
             log("📌 Способ 1: тап по координатам", Theme.TextDim)
             for i = 1, RouteSettings.NumberUpRetryCount do
@@ -490,127 +492,63 @@ local function onDoorOpened(roomNum, doorInstance)
             end
         end
 
-        -- Способ 2: поиск кнопки по имени
-        log("🔍 Способ 2: поиск кнопки по имени", Theme.TextDim)
-        local buttons = findButtonByName("NumberUp")
-        if #buttons == 0 then
-            buttons = findButtonByName("Increase")
-        end
-        if #buttons == 0 then
-            buttons = findButtonByName("Up")
-        end
+        log("🔍 Способ 2: поиск по имени", Theme.TextDim)
+        local btns = findButtonByName("NumberUp")
+        if #btns == 0 then btns = findButtonByName("Increase") end
+        if #btns == 0 then btns = findButtonByName("Up") end
 
-        for _, btn in ipairs(buttons) do
+        for _, btn in ipairs(btns) do
             log("  Найдена: " .. btn:GetFullName(), Theme.Success)
             tryClickGuiButton(btn)
             task.wait(0.3)
         end
-
-        if #buttons == 0 then
-            log("  ❌ Кнопка не найдена", Theme.Danger)
-        end
     end)
 end
 
--- Проверка изменений дверей
 local function checkDoorChanges()
     if not RouteSettings.WatchDoors then return end
-
     for doorInstance, data in pairs(DoorWatcherData) do
         if not doorInstance or not doorInstance.Parent then
             DoorWatcherData[doorInstance] = nil
         else
-            local currentPos = doorInstance.Position
-            local currentRot = doorInstance.Orientation
-
-            local posDiff = (currentPos - data.Position).Magnitude
-            local rotDiff = (currentRot - data.Rotation).Magnitude
+            local posDiff = (doorInstance.Position - data.Position).Magnitude
+            local rotDiff = (doorInstance.Orientation - data.Rotation).Magnitude
 
             if posDiff > RouteSettings.DoorMoveThreshold or rotDiff > RouteSettings.DoorRotationThreshold then
-                log(string.format("🚪 ДВЕРЬ %s ИЗМЕНИЛАСЬ! (pos=%.2f, rot=%.2f)",
-                    data.RoomNum, posDiff, rotDiff), Theme.Success)
-
-                data.Position = currentPos
-                data.Rotation = currentRot
-                data.CFrame = doorInstance.CFrame
-
-                onDoorOpened(data.RoomNum, doorInstance)
+                log(string.format("🚪 Дверь %s: posDiff=%.1f rotDiff=%.1f", data.RoomNum, posDiff, rotDiff), Theme.Success)
+                data.Position = doorInstance.Position
+                data.Rotation = doorInstance.Orientation
+                onDoorOpened(data.RoomNum)
             end
         end
     end
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🏠 HOME POSITION
+-- 🏠 HOME
 -- ═══════════════════════════════════════════════════════
 local function setHomePosition(pos)
     RouteSettings.HomePosition = pos
-    log("🏠 Home Position установлена: " .. tostring(pos), Theme.Success)
+    log("🏠 Home: " .. tostring(pos), Theme.Success)
 end
 
 local function teleportToHome()
     if not RouteSettings.HomePosition then
-        log("⚠ Home Position не задана", Theme.Warning)
+        log("⚠ Home не задана", Theme.Warning)
         return false
     end
-
     local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not myHRP then return false end
-
-    -- Проверяем что там нет стены
     local path = buildPath(myHRP.Position, RouteSettings.HomePosition)
     teleportAlongPath(path)
-    log("🏠 Вернулся на Home Position", Theme.Success)
+    log("🏠 Вернулся на Home", Theme.Success)
     return true
 end
 
--- Запомнить текущую позицию как Home
 local function rememberHomeFromNow()
     local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myHRP then
-        log("❌ Нет персонажа", Theme.Danger)
-        return
-    end
+    if not myHRP then log("❌ Нет персонажа", Theme.Danger); return end
     setHomePosition(myHRP.Position)
-end
-
--- ═══════════════════════════════════════════════════════
--- 🚗 ЕХАТЬ К КОМНАТЕ
--- ═══════════════════════════════════════════════════════
-function goToRoom(roomNum)
-    roomNum = roomNum or RouteSettings.CurrentRoom
-
-    if next(Doors) == nil then
-        local c = findDoors()
-        log("🔍 Найдено дверей: " .. c, Theme.Success)
-    end
-
-    local door = getDoor(roomNum)
-    if not door then
-        log("❌ Дверь комнаты " .. roomNum .. " не найдена", Theme.Danger)
-        return false
-    end
-
-    local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return false end
-
-    local myPos = myHRP.Position
-    local stopPos = calculateStopPoint(door)
-
-    log("🚪 Едем к комнате " .. roomNum, Theme.Warning)
-    log(string.format("📍 Я: (%.1f, %.1f, %.1f)", myPos.X, myPos.Y, myPos.Z), Theme.TextDim)
-    log(string.format("🛑 Стоп: (%.1f, %.1f, %.1f)", stopPos.X, stopPos.Y, stopPos.Z), Theme.TextDim)
-
-    local path = buildPath(myPos, stopPos)
-    teleportAlongPath(path)
-    log("✅ Достигли точки стопа комнаты " .. roomNum, Theme.Success)
-    return true
-end
-
-function goToNextRoom()
-    RouteSettings.CurrentRoom = RouteSettings.CurrentRoom + 1
-    log("➡ Комната: " .. RouteSettings.CurrentRoom, Theme.Warning)
-    return goToRoom(RouteSettings.CurrentRoom)
 end
 
 -- ═══════════════════════════════════════════════════════
@@ -659,7 +597,7 @@ TitleIcon.TextSize = 18
 TitleIcon.Parent = TitleBar
 
 local Title = Instance.new("TextLabel")
-Title.Text = "ESP  •  AUTO  •  v7.1"
+Title.Text = "ESP  •  AUTO  •  v8.0"
 Title.Size = UDim2.new(1, -150, 1, 0)
 Title.Position = UDim2.new(0, 46, 0, 0)
 Title.BackgroundTransparency = 1
@@ -735,7 +673,8 @@ TestTab.BackgroundTransparency = 1
 TestTab.BorderSizePixel = 0
 TestTab.ScrollBarThickness = 5
 TestTab.ScrollBarImageColor3 = Theme.Accent
-TestTab.CanvasSize = UDim2.new(0, 0, 0, 800)
+TestTab.CanvasSize = UDim2.new(0, 0, 0, 0)
+TestTab.AutomaticCanvasSize = Enum.AutomaticSize.Y
 TestTab.Visible = false
 TestTab.Parent = ContentFrame
 
@@ -887,211 +826,6 @@ local function makeInput(parent, text, default, callback)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "ТЕСТ"
--- ═══════════════════════════════════════════════════════
-local function makeTestBtn(text, callback, color)
-    return makeButton(TestTab, text, callback, color)
-end
-
-makeSection(TestTab, "МАРШРУТ")
-
-makeTestBtn("🚪 К комнате", function()
-    goToRoom(RouteSettings.CurrentRoom)
-end, Theme.Success)
-
-makeTestBtn("➡ Следующая комната", function()
-    goToNextRoom()
-end, Theme.Warning)
-
-makeTestBtn("🏠 Запомнить Home Position (текущая)", function()
-    rememberHomeFromNow()
-end, Theme.Accent)
-
-makeTestBtn("🏠 Вернуться на Home Position", function()
-    teleportToHome()
-end, Theme.Warning)
-
-makeTestBtn("👁️ Начать слежение за дверями", function()
-    local c = findDoors()
-    log("🔍 Найдено дверей: " .. c, Theme.Success)
-    initDoorWatcher()
-end, Theme.Accent)
-
-makeTestBtn("🎯 Нажать NumberUp (ручной тест)", function()
-    local buttons = findButtonByName("NumberUp")
-    if #buttons == 0 then
-        buttons = findButtonByName("Increase")
-    end
-    if #buttons == 0 then
-        buttons = findButtonByName("Up")
-    end
-
-    if #buttons == 0 then
-        log("❌ Кнопка NumberUp не найдена", Theme.Danger)
-        -- Пробуем по координатам
-        if Settings.Buttons.NumberUp then
-            log("📌 Пробую по сохранённым координатам", Theme.Warning)
-            fireButtonAction(Settings.Buttons.NumberUp)
-        end
-        return
-    end
-
-    for _, btn in ipairs(buttons) do
-        log("🔍 Найдена: " .. btn:GetFullName(), Theme.Success)
-        tryClickGuiButton(btn)
-    end
-end, Theme.Warning)
-
-makeSection(TestTab, "КООРДИНАТЫ КНОПОК")
-
-makeTestBtn("▶  Активировать", function()
-    if Settings.Buttons.Activate then
-        fireButtonAction(Settings.Buttons.Activate)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🎫 Выдать билет", function()
-    if Settings.Buttons.GiveTicket then
-        fireButtonAction(Settings.Buttons.GiveTicket)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔫 Проверить оружие", function()
-    if Settings.Buttons.CheckWeapon then
-        fireButtonAction(Settings.Buttons.CheckWeapon)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("⏹  Деактивировать", function()
-    if Settings.Buttons.Deactivate then
-        fireButtonAction(Settings.Buttons.Deactivate)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔢 Увеличение номера (тап по координатам)", function()
-    if Settings.Buttons.NumberUp then
-        fireButtonAction(Settings.Buttons.NumberUp)
-    else
-        log("❌ Координаты не заданы", Theme.Danger)
-    end
-end)
-
-makeTestBtn("🔄 Сбросить состояние", function()
-    ActionState = "idle"
-    StateTimer = 0
-    ProcessedPlayers = {}
-    IgnoredPlayers = {}
-    Queue = {}
-    doorOpenHandled = {}
-    log("Состояние сброшено", Theme.Warning)
-end, Theme.Danger)
-
--- ═══════════════════════════════════════════════════════
--- 📋 ВКЛАДКА "НАСТРОЙКИ"
--- ═══════════════════════════════════════════════════════
-makeSection(SettingsTab, "СДВИГИ КООРДИНАТ")
-makeInput(SettingsTab, "Сдвиг по X (например -50)", Settings.CrosshairOffsetX, function(v)
-    Settings.CrosshairOffsetX = v
-    log("Сдвиг X: " .. v, Theme.Warning)
-end)
-makeInput(SettingsTab, "Сдвиг по Y (например 50)", Settings.CrosshairOffsetY, function(v)
-    Settings.CrosshairOffsetY = v
-    log("Сдвиг Y: " .. v, Theme.Warning)
-end)
-
-makeSection(SettingsTab, "HOME POSITION")
-makeInput(SettingsTab, "Home X", RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0, function(v)
-    local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
-    local z = RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0
-    setHomePosition(Vector3.new(v, y, z))
-end)
-makeInput(SettingsTab, "Home Y", RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0, function(v)
-    local x = RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0
-    local z = RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0
-    setHomePosition(Vector3.new(x, v, z))
-end)
-makeInput(SettingsTab, "Home Z", RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0, function(v)
-    local x = RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0
-    local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
-    setHomePosition(Vector3.new(x, y, v))
-end)
-makeTestBtn("📍 Запомнить текущую как Home", function()
-    rememberHomeFromNow()
-end, Theme.Success)
-
-makeSection(SettingsTab, "WATCHER ДВЕРЕЙ")
-makeToggle(SettingsTab, "Следить за дверями", RouteSettings.WatchDoors, function(v)
-    RouteSettings.WatchDoors = v
-    if v then
-        initDoorWatcher()
-    end
-end)
-makeInput(SettingsTab, "Порог поворота (градусы)", RouteSettings.DoorRotationThreshold, function(v)
-    RouteSettings.DoorRotationThreshold = v
-end)
-makeInput(SettingsTab, "Порог смещения (studs)", RouteSettings.DoorMoveThreshold, function(v)
-    RouteSettings.DoorMoveThreshold = v
-end)
-makeInput(SettingsTab, "Попыток NumberUp", RouteSettings.NumberUpRetryCount, function(v)
-    RouteSettings.NumberUpRetryCount = v
-end)
-makeInput(SettingsTab, "Задержка между попытками (сек)", RouteSettings.NumberUpRetryDelay, function(v)
-    RouteSettings.NumberUpRetryDelay = v
-end)
-makeToggle(SettingsTab, "Возврат на Home если игрок исчез", RouteSettings.ReturnHomeOnPlayerLeft, function(v)
-    RouteSettings.ReturnHomeOnPlayerLeft = v
-end)
-
-makeSection(SettingsTab, "МАРШРУТ")
-makeInput(SettingsTab, "Текущая комната", RouteSettings.CurrentRoom, function(v)
-    RouteSettings.CurrentRoom = v
-end)
-makeInput(SettingsTab, "Шаг телепорта (studs)", RouteSettings.StepSize, function(v)
-    RouteSettings.StepSize = v
-end)
-makeInput(SettingsTab, "Сдвиг влево от двери", RouteSettings.StopLeftOffset, function(v)
-    RouteSettings.StopLeftOffset = v
-end)
-makeInput(SettingsTab, "Сдвиг назад от двери", RouteSettings.StopBackOffset, function(v)
-    RouteSettings.StopBackOffset = v
-end)
-
-makeSection(SettingsTab, "АВТОДЕЙСТВИЯ")
-makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
-    Settings.AutoActions = v
-    log("Автодействия: " .. (v and "ВКЛ" or "ВЫКЛ"), v and Theme.Success or Theme.TextDim)
-end)
-makeToggle(SettingsTab, "Нажимать «Активировать»", Settings.DoActivate, function(v) Settings.DoActivate = v end)
-makeToggle(SettingsTab, "Нажимать «Выдать билет»", Settings.DoGiveTicket, function(v) Settings.DoGiveTicket = v end)
-makeToggle(SettingsTab, "Нажимать «Проверить оружие»", Settings.DoCheckWeapon, function(v) Settings.DoCheckWeapon = v end)
-makeToggle(SettingsTab, "Нажимать «Деактивировать»", Settings.DoDeactivate, function(v) Settings.DoDeactivate = v end)
-
-makeSection(SettingsTab, "ПАРАМЕТРЫ")
-makeInput(SettingsTab, "Радиус обнаружения (м)", Settings.TriggerRadius, function(v) Settings.TriggerRadius = v end)
-makeInput(SettingsTab, "Порог приближения (м)", Settings.ApproachThreshold, function(v) Settings.ApproachThreshold = v end)
-makeInput(SettingsTab, "Ожидание после Активировать (с)", Settings.WaitAfterActivate, function(v) Settings.WaitAfterActivate = v end)
-makeInput(SettingsTab, "Ожидание перед Проверить (с)", Settings.WaitBeforeCheck, function(v) Settings.WaitBeforeCheck = v end)
-makeInput(SettingsTab, "Ожидание перед Деактивировать (с)", Settings.WaitBeforeDeactivate, function(v) Settings.WaitBeforeDeactivate = v end)
-makeInput(SettingsTab, "Ожидание если ушёл (с)", Settings.WaitLeftWithoutApproach, function(v) Settings.WaitLeftWithoutApproach = v end)
-makeInput(SettingsTab, "Задержка между игроками (с)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
-makeInput(SettingsTab, "Игнор после деактивации (с)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
-
-makeSection(SettingsTab, "ESP")
-makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Settings.Enabled = v end)
-makeToggle(SettingsTab, "Показывать имя", Settings.ShowName, function(v) Settings.ShowName = v end)
-makeToggle(SettingsTab, "Показывать здоровье", Settings.ShowHealth, function(v) Settings.ShowHealth = v end)
-makeToggle(SettingsTab, "Показывать дистанцию", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
-makeToggle(SettingsTab, "Показывать статус", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
-
--- ═══════════════════════════════════════════════════════
 -- 🎯 ПРИЦЕЛ
 -- ═══════════════════════════════════════════════════════
 local CrosshairGui = Instance.new("ScreenGui")
@@ -1226,6 +960,11 @@ SelectBtn.MouseButton1Click:Connect(function()
     local x, y = math.floor(pos.X), math.floor(pos.Y)
     Settings.Buttons[currentPickKey] = {Pos = {X = x, Y = y}}
     log(string.format("✓ %s: X=%d, Y=%d", currentPickName, x, y), Theme.Success)
+
+    if getgenv().refreshButtonLabels then
+        getgenv().refreshButtonLabels()
+    end
+
     CrosshairGui.Enabled = false
     MainGui.Enabled = true
     currentPickKey = nil
@@ -1246,36 +985,67 @@ RunService.RenderStepped:Connect(function()
     if not CrosshairGui.Enabled then return end
     local pos = CrossHandle.AbsolutePosition + CrossHandle.AbsoluteSize / 2
     CoordLabel.Text = string.format("X: %d   Y: %d", pos.X, pos.Y)
-    OffsetInfo.Text = string.format("Сдвиг X: %d  Y: %d", 
+    OffsetInfo.Text = string.format("Сдвиг X: %d  Y: %d",
         Settings.CrosshairOffsetX or 0, Settings.CrosshairOffsetY or 0)
 end)
 
 -- ═══════════════════════════════════════════════════════
--- 🎨 ESP
+-- 🎨 ESP (правильный с Box + Highlight + статусом)
 -- ═══════════════════════════════════════════════════════
+
+-- Функция создания ESP
 local function createESP(player)
     if player == LocalPlayer then return end
+    if ESPCache[player] then return end
+
     local esp = {}
 
+    -- ─── Highlight (обводка всей модели) ───
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ESP_Highlight"
+    highlight.FillColor = Settings.HighlightColor
+    highlight.FillTransparency = 0.85
+    highlight.OutlineColor = Settings.BoxColor
+    highlight.OutlineTransparency = 0
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = MainGui
+
+    esp.Highlight = highlight
+
+    -- ─── Billboard (имя + статус + дистанция + здоровье) ───
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "ESP_Billboard"
     billboard.AlwaysOnTop = true
-    billboard.Size = UDim2.new(0, 200, 0, 70)
-    billboard.StudsOffset = Vector3.new(0, Settings.HeadOffset + 2, 0)
+    billboard.Size = UDim2.new(0, 200, 0, 90)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 3.2, 0)
     billboard.Enabled = false
     billboard.Parent = MainGui
 
+    -- Фон для читаемости (полупрозрачный)
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, -20, 1, -10)
+    bg.Position = UDim2.new(0, 10, 0, 5)
+    bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    bg.BackgroundTransparency = 0.6
+    bg.BorderSizePixel = 0
+    bg.Parent = billboard
+    addCorner(bg, 6)
+
+    -- Статус (верхняя строка)
     local statusLabel = Instance.new("TextLabel")
     statusLabel.Size = UDim2.new(1, 0, 0, 22)
+    statusLabel.Position = UDim2.new(0, 0, 0, 0)
     statusLabel.BackgroundTransparency = 1
     statusLabel.Font = Enum.Font.GothamBold
-    statusLabel.TextSize = 16
+    statusLabel.TextSize = 15
     statusLabel.TextColor3 = Color3.fromRGB(255, 220, 80)
     statusLabel.TextStrokeTransparency = 0
     statusLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    statusLabel.Text = ""
     statusLabel.Visible = false
     statusLabel.Parent = billboard
 
+    -- Имя
     local nameLabel = Instance.new("TextLabel")
     nameLabel.Size = UDim2.new(1, 0, 0, 22)
     nameLabel.Position = UDim2.new(0, 0, 0, 22)
@@ -1287,29 +1057,98 @@ local function createESP(player)
     nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     nameLabel.Parent = billboard
 
+    -- Дистанция
     local distLabel = Instance.new("TextLabel")
-    distLabel.Size = UDim2.new(1, 0, 0, 20)
+    distLabel.Size = UDim2.new(1, 0, 0, 18)
     distLabel.Position = UDim2.new(0, 0, 0, 44)
     distLabel.BackgroundTransparency = 1
     distLabel.Font = Enum.Font.Gotham
-    distLabel.TextSize = Settings.TextSize - 2
+    distLabel.TextSize = Settings.TextSize - 3
     distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
     distLabel.TextStrokeTransparency = 0
     distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     distLabel.Parent = billboard
 
+    -- Полоса здоровья
+    local healthBg = Instance.new("Frame")
+    healthBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    healthBg.BorderSizePixel = 0
+    healthBg.Size = UDim2.new(1, -20, 0, 6)
+    healthBg.Position = UDim2.new(0, 10, 0, 66)
+    healthBg.Parent = billboard
+    addCorner(healthBg, 3)
+
+    local healthFill = Instance.new("Frame")
+    healthFill.BackgroundColor3 = Settings.HealthColor
+    healthFill.BorderSizePixel = 0
+    healthFill.Size = UDim2.new(1, 0, 1, 0)
+    healthFill.Parent = healthBg
+    addCorner(healthFill, 3)
+
+    -- Обводка для имени
+    local nameStroke = Instance.new("UIStroke")
+    nameStroke.Color = Color3.fromRGB(0, 0, 0)
+    nameStroke.Thickness = 2
+    nameStroke.Parent = nameLabel
+
     esp.Billboard = billboard
     esp.StatusLabel = statusLabel
     esp.NameLabel = nameLabel
     esp.DistLabel = distLabel
+    esp.HealthBg = healthBg
+    esp.HealthFill = healthFill
     esp.StatusText = ""
 
     ESPCache[player] = esp
+
+    -- Привязываем к персонажу если он уже есть
+    if player.Character then
+        esp.Highlight.Adornee = player.Character
+        local head = player.Character:FindFirstChild("Head")
+        if head then
+            esp.Billboard.Adornee = head
+        end
+    end
+end
+
+-- Отслеживание появления персонажа
+local function setupESPForCharacter(player)
+    local esp = ESPCache[player]
+    if not esp then return end
+
+    player.CharacterAdded:Connect(function(character)
+        task.wait(0.5)
+        if esp.Highlight then
+            esp.Highlight.Adornee = character
+        end
+        local head = character:WaitForChild("Head", 5)
+        if head and esp.Billboard then
+            esp.Billboard.Adornee = head
+        end
+    end)
+
+    if player.Character then
+        if esp.Highlight then
+            esp.Highlight.Adornee = player.Character
+        end
+        local head = player.Character:FindFirstChild("Head")
+        if head and esp.Billboard then
+            esp.Billboard.Adornee = head
+        end
+    end
+end
+
+-- Создание ESP для игрока + подписка на персонажа
+local function createESPFull(player)
+    if player == LocalPlayer then return end
+    createESP(player)
+    setupESPForCharacter(player)
 end
 
 local function removeESP(player)
     local esp = ESPCache[player]
     if not esp then return end
+    if esp.Highlight then esp.Highlight:Destroy() end
     if esp.Billboard then esp.Billboard:Destroy() end
     ESPCache[player] = nil
 end
@@ -1320,11 +1159,236 @@ local function setPlayerStatus(player, text, color)
     esp.StatusText = text or ""
     esp.StatusLabel.Text = text or ""
     esp.StatusLabel.TextColor3 = color or Color3.fromRGB(255, 220, 80)
+    esp.StatusLabel.Visible = (text and text ~= "")
 end
 
 local function clearPlayerStatus(player)
     setPlayerStatus(player, "", nil)
 end
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "ТЕСТ"
+-- ═══════════════════════════════════════════════════════
+local function makeTestBtn(text, callback, color)
+    return makeButton(TestTab, text, callback, color)
+end
+
+makeSection(TestTab, "МАРШРУТ")
+
+makeTestBtn("🚪 К комнате", function()
+    goToRoom(RouteSettings.CurrentRoom)
+end, Theme.Success)
+
+makeTestBtn("➡ Следующая комната", function()
+    goToNextRoom()
+end, Theme.Warning)
+
+makeTestBtn("🏠 Запомнить Home (текущая позиция)", function()
+    rememberHomeFromNow()
+end, Theme.Accent)
+
+makeTestBtn("🏠 Вернуться на Home", function()
+    teleportToHome()
+end, Theme.Warning)
+
+makeTestBtn("👁️ Начать слежение за дверями", function()
+    local c = findDoors()
+    log("🔍 Найдено дверей: " .. c, Theme.Success)
+    initDoorWatcher()
+end, Theme.Accent)
+
+makeTestBtn("🎯 Нажать NumberUp (ручной тест)", function()
+    local btns = findButtonByName("NumberUp")
+    if #btns == 0 then btns = findButtonByName("Increase") end
+    if #btns == 0 then btns = findButtonByName("Up") end
+    if #btns == 0 then
+        log("❌ Кнопка не найдена", Theme.Danger)
+        if Settings.Buttons.NumberUp then
+            fireButtonAction(Settings.Buttons.NumberUp)
+        end
+        return
+    end
+    for _, btn in ipairs(btns) do
+        log("🔍 Найдена: " .. btn:GetFullName(), Theme.Success)
+        tryClickGuiButton(btn)
+    end
+end, Theme.Warning)
+
+makeSection(TestTab, "КООРДИНАТЫ КНОПОК")
+
+makeTestBtn("▶  Активировать", function()
+    if Settings.Buttons.Activate then fireButtonAction(Settings.Buttons.Activate)
+    else log("❌ Координаты не заданы", Theme.Danger) end
+end)
+
+makeTestBtn("🎫 Выдать билет", function()
+    if Settings.Buttons.GiveTicket then fireButtonAction(Settings.Buttons.GiveTicket)
+    else log("❌ Координаты не заданы", Theme.Danger) end
+end)
+
+makeTestBtn("🔫 Проверить оружие", function()
+    if Settings.Buttons.CheckWeapon then fireButtonAction(Settings.Buttons.CheckWeapon)
+    else log("❌ Координаты не заданы", Theme.Danger) end
+end)
+
+makeTestBtn("⏹  Деактивировать", function()
+    if Settings.Buttons.Deactivate then fireButtonAction(Settings.Buttons.Deactivate)
+    else log("❌ Координаты не заданы", Theme.Danger) end
+end)
+
+makeTestBtn("🔢 Увеличение номера", function()
+    if Settings.Buttons.NumberUp then fireButtonAction(Settings.Buttons.NumberUp)
+    else log("❌ Координаты не заданы", Theme.Danger) end
+end)
+
+makeTestBtn("🔄 Сбросить состояние", function()
+    ActionState = "idle"
+    StateTimer = 0
+    ProcessedPlayers = {}
+    IgnoredPlayers = {}
+    Queue = {}
+    doorOpenHandled = {}
+    log("Состояние сброшено", Theme.Warning)
+end, Theme.Danger)
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ВКЛАДКА "НАСТРОЙКИ"
+-- ═══════════════════════════════════════════════════════
+
+-- ─── КООРДИНАТЫ КНОПОК ───
+makeSection(SettingsTab, "КООРДИНАТЫ КНОПОК")
+
+local buttonLabelRefs = {}
+
+local function makeButtonSetter(name, key)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
+    row.BackgroundColor3 = Theme.Bg
+    row.BorderSizePixel = 0
+    row.Parent = SettingsTab
+    addCorner(row, 8)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Text = name
+    lbl.Size = UDim2.new(0.5, -12, 1, 0)
+    lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Theme.Text
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.5, -12, 0, 24)
+    btn.Position = UDim2.new(0.5, 0, 0.5, -12)
+    btn.BackgroundColor3 = Settings.Buttons[key] and Theme.Success or Theme.Warning
+    btn.Text = Settings.Buttons[key] and "✓ Задано" or "Выбрать"
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 11
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = row
+    addCorner(btn, 6)
+
+    btn.MouseButton1Click:Connect(function()
+        openCrosshairPicker(key, name)
+    end)
+
+    buttonLabelRefs[key] = {btn = btn, name = name}
+end
+
+function getgenv().refreshButtonLabels()
+    for key, ref in pairs(buttonLabelRefs) do
+        local data = Settings.Buttons[key]
+        if data and data.Pos then
+            ref.btn.Text = string.format("✓ X=%d, Y=%d", data.Pos.X, data.Pos.Y)
+            ref.btn.BackgroundColor3 = Theme.Success
+        else
+            ref.btn.Text = "Выбрать"
+            ref.btn.BackgroundColor3 = Theme.Warning
+        end
+    end
+end
+
+makeButtonSetter("Активировать", "Activate")
+makeButtonSetter("Выдать билет", "GiveTicket")
+makeButtonSetter("Проверить оружие", "CheckWeapon")
+makeButtonSetter("Деактивировать", "Deactivate")
+makeButtonSetter("Увеличение номера (NumberUp)", "NumberUp")
+
+-- ─── СДВИГИ КООРДИНАТ ───
+makeSection(SettingsTab, "СДВИГИ КООРДИНАТ")
+makeInput(SettingsTab, "Сдвиг по X (например -50)", Settings.CrosshairOffsetX, function(v)
+    Settings.CrosshairOffsetX = v
+    log("Сдвиг X: " .. v, Theme.Warning)
+end)
+makeInput(SettingsTab, "Сдвиг по Y (например 50)", Settings.CrosshairOffsetY, function(v)
+    Settings.CrosshairOffsetY = v
+    log("Сдвиг Y: " .. v, Theme.Warning)
+end)
+
+-- ─── HOME POSITION ───
+makeSection(SettingsTab, "HOME POSITION")
+makeInput(SettingsTab, "Home X", RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0, function(v)
+    local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
+    local z = RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0
+    setHomePosition(Vector3.new(v, y, z))
+end)
+makeInput(SettingsTab, "Home Y", RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0, function(v)
+    local x = RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0
+    local z = RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0
+    setHomePosition(Vector3.new(x, v, z))
+end)
+makeInput(SettingsTab, "Home Z", RouteSettings.HomePosition and RouteSettings.HomePosition.Z or 0, function(v)
+    local x = RouteSettings.HomePosition and RouteSettings.HomePosition.X or 0
+    local y = RouteSettings.HomePosition and RouteSettings.HomePosition.Y or 0
+    setHomePosition(Vector3.new(x, y, v))
+end)
+
+-- ─── WATCHER ДВЕРЕЙ ───
+makeSection(SettingsTab, "WATCHER ДВЕРЕЙ")
+makeToggle(SettingsTab, "Следить за дверями", RouteSettings.WatchDoors, function(v)
+    RouteSettings.WatchDoors = v
+    if v then initDoorWatcher() end
+end)
+makeInput(SettingsTab, "Порог поворота (градусы)", RouteSettings.DoorRotationThreshold, function(v) RouteSettings.DoorRotationThreshold = v end)
+makeInput(SettingsTab, "Порог смещения (studs)", RouteSettings.DoorMoveThreshold, function(v) RouteSettings.DoorMoveThreshold = v end)
+makeInput(SettingsTab, "Попыток NumberUp", RouteSettings.NumberUpRetryCount, function(v) RouteSettings.NumberUpRetryCount = v end)
+makeInput(SettingsTab, "Задержка между попытками (сек)", RouteSettings.NumberUpRetryDelay, function(v) RouteSettings.NumberUpRetryDelay = v end)
+makeToggle(SettingsTab, "Возврат на Home если игрок исчез", RouteSettings.ReturnHomeOnPlayerLeft, function(v) RouteSettings.ReturnHomeOnPlayerLeft = v end)
+
+-- ─── АВТОДЕЙСТВИЯ ───
+makeSection(SettingsTab, "АВТОДЕЙСТВИЯ")
+makeToggle(SettingsTab, "Автодействия ВКЛ", Settings.AutoActions, function(v)
+    Settings.AutoActions = v
+    log("Автодействия: " .. (v and "ВКЛ" or "ВЫКЛ"), v and Theme.Success or Theme.TextDim)
+end)
+makeToggle(SettingsTab, "Нажимать «Активировать»", Settings.DoActivate, function(v) Settings.DoActivate = v end)
+makeToggle(SettingsTab, "Нажимать «Выдать билет»", Settings.DoGiveTicket, function(v) Settings.DoGiveTicket = v end)
+makeToggle(SettingsTab, "Нажимать «Проверить оружие»", Settings.DoCheckWeapon, function(v) Settings.DoCheckWeapon = v end)
+makeToggle(SettingsTab, "Нажимать «Деактивировать»", Settings.DoDeactivate, function(v) Settings.DoDeactivate = v end)
+
+-- ─── ПАРАМЕТРЫ ───
+makeSection(SettingsTab, "ПАРАМЕТРЫ")
+makeInput(SettingsTab, "Радиус обнаружения (м)", Settings.TriggerRadius, function(v) Settings.TriggerRadius = v end)
+makeInput(SettingsTab, "Порог приближения (м)", Settings.ApproachThreshold, function(v) Settings.ApproachThreshold = v end)
+makeInput(SettingsTab, "Ожидание после Активировать (с)", Settings.WaitAfterActivate, function(v) Settings.WaitAfterActivate = v end)
+makeInput(SettingsTab, "Ожидание перед Проверить (с)", Settings.WaitBeforeCheck, function(v) Settings.WaitBeforeCheck = v end)
+makeInput(SettingsTab, "Ожидание перед Деактивировать (с)", Settings.WaitBeforeDeactivate, function(v) Settings.WaitBeforeDeactivate = v end)
+makeInput(SettingsTab, "Ожидание если ушёл (с)", Settings.WaitLeftWithoutApproach, function(v) Settings.WaitLeftWithoutApproach = v end)
+makeInput(SettingsTab, "Задержка между игроками (с)", Settings.QueueDelay, function(v) Settings.QueueDelay = v end)
+makeInput(SettingsTab, "Игнор после деактивации (с)", Settings.IgnoreDuration, function(v) Settings.IgnoreDuration = v end)
+
+-- ─── ESP ───
+makeSection(SettingsTab, "ESP")
+makeToggle(SettingsTab, "ESP включён", Settings.Enabled, function(v) Settings.Enabled = v end)
+makeToggle(SettingsTab, "Показывать имя", Settings.ShowName, function(v) Settings.ShowName = v end)
+makeToggle(SettingsTab, "Показывать здоровье", Settings.ShowHealth, function(v) Settings.ShowHealth = v end)
+makeToggle(SettingsTab, "Показывать дистанцию", Settings.ShowDistance, function(v) Settings.ShowDistance = v end)
+makeToggle(SettingsTab, "Показывать статус", Settings.ShowStatus, function(v) Settings.ShowStatus = v end)
+makeToggle(SettingsTab, "Показывать обводку (Highlight)", Settings.ShowHighlight, function(v) Settings.ShowHighlight = v end)
 
 -- ═══════════════════════════════════════════════════════
 -- 🔄 ОСНОВНОЙ ЦИКЛ
@@ -1337,32 +1401,61 @@ RunService.RenderStepped:Connect(function(dt)
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local head = char and char:FindFirstChild("Head")
             local hum = char and char:FindFirstChildOfClass("Humanoid")
+
             if not hrp or not head or not hum or hum.Health <= 0 then
-                esp.Billboard.Enabled = false
+                if esp.Billboard then esp.Billboard.Enabled = false end
+                if esp.Highlight then esp.Highlight.Enabled = false end
             elseif Settings.TeamCheck and player.Team == LocalPlayer.Team then
-                esp.Billboard.Enabled = false
+                if esp.Billboard then esp.Billboard.Enabled = false end
+                if esp.Highlight then esp.Highlight.Enabled = false end
             else
                 local d = (Camera.CFrame.Position - hrp.Position).Magnitude
                 if d > Settings.MaxDistance then
-                    esp.Billboard.Enabled = false
+                    if esp.Billboard then esp.Billboard.Enabled = false end
+                    if esp.Highlight then esp.Highlight.Enabled = false end
                 else
-                    esp.Billboard.Adornee = head
-                    esp.Billboard.Enabled = true
-                    esp.NameLabel.Text = player.Name
-                    esp.NameLabel.Visible = Settings.ShowName
-                    esp.DistLabel.Text = string.format("[%d m]", d)
-                    esp.DistLabel.Visible = Settings.ShowDistance
-                    esp.StatusLabel.Visible = Settings.ShowStatus and (esp.StatusText ~= "")
+                    -- Обновляем привязку
+                    if esp.Billboard and esp.Billboard.Adornee ~= head then
+                        esp.Billboard.Adornee = head
+                    end
+                    if esp.Highlight and esp.Highlight.Adornee ~= char then
+                        esp.Highlight.Adornee = char
+                    end
+
+                    -- Billboard
+                    if esp.Billboard then
+                        esp.Billboard.Enabled = true
+                        esp.NameLabel.Text = player.Name
+                        esp.NameLabel.Visible = Settings.ShowName
+                        esp.DistLabel.Text = string.format("[%d m]", d)
+                        esp.DistLabel.Visible = Settings.ShowDistance
+                        esp.StatusLabel.Visible = Settings.ShowStatus and (esp.StatusText ~= "")
+
+                        local hp = hum.Health / hum.MaxHealth
+                        esp.HealthFill.Size = UDim2.new(hp, 0, 1, 0)
+                        esp.HealthFill.BackgroundColor3 = Color3.fromRGB(
+                            math.floor(255 * (1 - hp)),
+                            math.floor(255 * hp),
+                            0
+                        )
+                        esp.HealthBg.Visible = Settings.ShowHealth
+                    end
+
+                    -- Highlight
+                    if esp.Highlight then
+                        esp.Highlight.Enabled = Settings.ShowHighlight
+                    end
                 end
             end
         end
     else
         for _, esp in pairs(ESPCache) do
             if esp.Billboard then esp.Billboard.Enabled = false end
+            if esp.Highlight then esp.Highlight.Enabled = false end
         end
     end
 
-    -- Door Watcher — проверяем изменения каждый кадр
+    -- Watcher
     checkDoorChanges()
 
     -- Автодействия
@@ -1416,12 +1509,13 @@ RunService.RenderStepped:Connect(function(dt)
         end
     end
 
-    -- Проверяем что target жив
+    -- Проверка что target жив
     if CurrentTarget and ActionState ~= "idle" then
-        if not CurrentTarget.Parent or not CurrentTarget.Character or not CurrentTarget.Character:FindFirstChild("HumanoidRootPart") then
-            log("💨 Игрок исчез — возврат на Home Position", Theme.Danger)
+        if not CurrentTarget.Parent or not CurrentTarget.Character
+           or not CurrentTarget.Character:FindFirstChild("HumanoidRootPart") then
+            log("💨 Игрок исчез — Home + деактивация", Theme.Danger)
             clearPlayerStatus(CurrentTarget)
-            
+
             if RouteSettings.ReturnHomeOnPlayerLeft then
                 task.spawn(function()
                     if Settings.DoDeactivate and Settings.Buttons.Deactivate then
@@ -1433,7 +1527,7 @@ RunService.RenderStepped:Connect(function(dt)
                     end
                 end)
             end
-            
+
             CurrentTarget = nil
             ActionState = "idle"
             StateTimer = 0
@@ -1465,7 +1559,9 @@ RunService.RenderStepped:Connect(function(dt)
 
     -- TICKET
     if ActionState == "ticket" and StateTimer >= Settings.WaitBeforeCheck then
-        if CurrentTarget then setPlayerStatus(CurrentTarget, "ПРОВЕРКА ОРУЖИЯ", Color3.fromRGB(255, 180, 80)) end
+        if CurrentTarget then
+            setPlayerStatus(CurrentTarget, "ПРОВЕРКА ОРУЖИЯ", Color3.fromRGB(255, 180, 80))
+        end
         if Settings.DoCheckWeapon and Settings.Buttons.CheckWeapon then
             fireButtonAction(Settings.Buttons.CheckWeapon)
         end
@@ -1475,7 +1571,9 @@ RunService.RenderStepped:Connect(function(dt)
 
     -- WEAPON
     if ActionState == "weapon" and StateTimer >= Settings.WaitBeforeDeactivate then
-        if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ", Color3.fromRGB(200, 130, 255)) end
+        if CurrentTarget then
+            setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ", Color3.fromRGB(200, 130, 255))
+        end
         if Settings.DoDeactivate and Settings.Buttons.Deactivate then
             fireButtonAction(Settings.Buttons.Deactivate)
         end
@@ -1485,7 +1583,9 @@ RunService.RenderStepped:Connect(function(dt)
 
     -- WAIT LEFT
     if ActionState == "waitLeft" and StateTimer >= Settings.WaitLeftWithoutApproach then
-        if CurrentTarget then setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ (ушёл)", Color3.fromRGB(200, 130, 255)) end
+        if CurrentTarget then
+            setPlayerStatus(CurrentTarget, "ДЕАКТИВАЦИЯ (ушёл)", Color3.fromRGB(200, 130, 255))
+        end
         if Settings.DoDeactivate and Settings.Buttons.Deactivate then
             fireButtonAction(Settings.Buttons.Deactivate)
         end
@@ -1509,7 +1609,7 @@ end)
 -- ═══════════════════════════════════════════════════════
 -- 🎧 СОБЫТИЯ
 -- ═══════════════════════════════════════════════════════
-Players.PlayerAdded:Connect(createESP)
+Players.PlayerAdded:Connect(createESPFull)
 Players.PlayerRemoving:Connect(function(player)
     removeESP(player)
     ProcessedPlayers[player] = nil
@@ -1518,7 +1618,9 @@ Players.PlayerRemoving:Connect(function(player)
         if Queue[i] == player then table.remove(Queue, i) end
     end
 end)
-for _, p in pairs(Players:GetPlayers()) do createESP(p) end
+for _, p in pairs(Players:GetPlayers()) do
+    createESPFull(p)
+end
 
 -- ═══════════════════════════════════════════════════════
 -- 🔄 ВКЛАДКИ
@@ -1593,10 +1695,8 @@ getgenv().ESP = {
     SetHome = setHomePosition,
     RememberHome = rememberHomeFromNow,
     TeleportHome = teleportToHome,
-    ClickNumberUp = function()
-        local btns = findButtonByName("NumberUp")
-        for _, b in ipairs(btns) do tryClickGuiButton(b) end
-    end,
+    SetStatus = setPlayerStatus,
+    ClearStatus = clearPlayerStatus,
     Destroy = function()
         for p, _ in pairs(ESPCache) do removeESP(p) end
         pcall(function() MainGui:Destroy() end)
@@ -1609,7 +1709,7 @@ getgenv().ESP = {
 getgenv().ShowUI = function() MainGui.Enabled = true end
 getgenv().HideUI = function() MainGui.Enabled = false end
 
-log("✅ Скрипт v7.1 загружен!", Theme.Success)
-log("Сдвиг X/Y в Настройках", Theme.Warning)
-log("Home Position — запомни через кнопку в Тесте", Theme.Warning)
-log("Watcher дверей — включи и следи за RoomExit", Theme.Success)
+log("✅ Скрипт v8.0 загружен!", Theme.Success)
+log("ESP с обводкой + статусом", Theme.Success)
+log("Координаты кнопок: Настройки → КООРДИНАТЫ КНОПОК", Theme.Warning)
+log("Прицел: нажми «Выбрать» у любой кнопки", Theme.Warning)
