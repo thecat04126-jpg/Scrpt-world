@@ -1,7 +1,7 @@
 --[[
-    EventListener.lua — Перехват кликов по GUI-кнопкам
-    Кликаешь по любой кнопке → показывает её путь и инфо
-    Работает независимо от obj_inf.lua
+    EventListener.lua — Список всех кнопок в игре
+    Просто сканирует и показывает все GuiButton
+    Тап по кнопке в списке → инфо (путь, размер, координаты)
     Для Delta Executor
 --]]
 
@@ -41,7 +41,6 @@ local Colors = {
     LogText   = Color3.fromRGB(180, 220, 180),
     ButtonCol = Color3.fromRGB(120, 200, 255),
     CodeCol   = Color3.fromRGB(180, 255, 200),
-    Highlight = Color3.fromRGB(0, 255, 150),
 }
 
 -- ═══════════════════════════════════════════════════════
@@ -93,31 +92,7 @@ local function makeDraggable(frame, handle)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 📦 ФОРМАТИРОВАНИЕ
--- ═══════════════════════════════════════════════════════
-local function formatValue(val)
-    local t = typeof(val)
-    if t == "Vector3" then
-        return string.format("Vector3(%.3f, %.3f, %.3f)", val.X, val.Y, val.Z)
-    elseif t == "Vector2" then
-        return string.format("Vector2(%.3f, %.3f)", val.X, val.Y)
-    elseif t == "Color3" then
-        return string.format("Color3(%d, %d, %d)",
-            math.floor(val.R * 255), math.floor(val.G * 255), math.floor(val.B * 255))
-    elseif t == "EnumItem" then
-        return "Enum." .. tostring(val)
-    elseif t == "Instance" then
-        return val.ClassName .. " [" .. val.Name .. "]"
-    elseif t == "number" then
-        if val == math.floor(val) then return tostring(val) end
-        return string.format("%.4f", val)
-    else
-        return tostring(val)
-    end
-end
-
--- ═══════════════════════════════════════════════════════
--- 🎯 АНАЛИЗ КНОПКИ
+-- 🔍 АНАЛИЗ КНОПКИ
 -- ═══════════════════════════════════════════════════════
 local function analyzeButton(obj)
     if not obj or not obj:IsA("GuiButton") then return nil end
@@ -134,11 +109,12 @@ local function analyzeButton(obj)
         Size = obj.AbsoluteSize,
         Position = obj.AbsolutePosition,
         ZIndex = obj.ZIndex,
-        Parent = obj.Parent and obj.Parent.Name or "nil",
+        ParentName = obj.Parent and obj.Parent.Name or "nil",
+        ParentClass = obj.Parent and obj.Parent.ClassName or "nil",
         ScreenGui = nil,
-        ScreenGuiEnabled = nil,
     }
 
+    -- Строим путь
     local objPath = {}
     local current = obj
     while current and current ~= LocalPlayer.PlayerGui and current ~= CoreGui and current ~= game do
@@ -152,11 +128,11 @@ local function analyzeButton(obj)
         info.CoreGuiPath = table.concat(objPath, ".")
     end
 
+    -- ScreenGui родитель
     local parent = obj.Parent
     while parent and parent ~= game do
         if parent:IsA("ScreenGui") then
             info.ScreenGui = parent.Name
-            info.ScreenGuiEnabled = parent.Enabled
             break
         end
         parent = parent.Parent
@@ -166,335 +142,43 @@ local function analyzeButton(obj)
 end
 
 -- ═══════════════════════════════════════════════════════
--- 🖥️ ГЛАВНОЕ ОКНО (список найденных кнопок)
+-- 🔍 СКАНИРОВАНИЕ ВСЕХ КНОПОК
 -- ═══════════════════════════════════════════════════════
-local MainGui = Instance.new("ScreenGui")
-MainGui.Name = "EventListener_UI"
-MainGui.ResetOnSpawn = false
-MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-MainGui.DisplayOrder = 100
-pcall(function() MainGui.Parent = CoreGui end)
-if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+local OurGuiNames = {
+    "eventlistener", "event_listener", "objinspector", "obj_inf",
+    "esp_mainui", "esp_crosshair", "esp_clickindicator",
+    "routeauto", "aim", "esp_",
+}
 
--- Индикатор вверху
-local Indicator = Instance.new("Frame")
-Indicator.Size = UDim2.new(0, 280, 0, 44)
-Indicator.Position = UDim2.new(0.5, -140, 0, 10)
-Indicator.BackgroundColor3 = Colors.Bg
-Indicator.BackgroundTransparency = 0.05
-Indicator.BorderSizePixel = 0
-Indicator.Visible = false
-Indicator.ZIndex = 9999
-Indicator.Parent = MainGui
-addCorner(Indicator, 10)
-addStroke(Indicator, Colors.Success, 2)
+local function isOurGui(gui)
+    if gui == MainGui or gui == NotifGui then return true end
+    local n = (gui.Name or ""):lower()
+    for _, fname in ipairs(OurGuiNames) do
+        if n:find(fname, 1, true) then return true end
+    end
+    return false
+end
 
-local IndIcon = Instance.new("TextLabel")
-IndIcon.Text = "🎧"
-IndIcon.Size = UDim2.new(0, 34, 1, 0)
-IndIcon.Position = UDim2.new(0, 8, 0, 0)
-IndIcon.BackgroundTransparency = 1
-IndIcon.TextColor3 = Colors.Success
-IndIcon.Font = Enum.Font.GothamBold
-IndIcon.TextSize = 20
-IndIcon.ZIndex = 10000
-IndIcon.Parent = Indicator
-
-local IndLabel = Instance.new("TextLabel")
-IndLabel.Text = "СЛУШАЮ КЛИКИ"
-IndLabel.Size = UDim2.new(1, -44, 0.5, 0)
-IndLabel.Position = UDim2.new(0, 44, 0, 6)
-IndLabel.BackgroundTransparency = 1
-IndLabel.TextColor3 = Colors.Text
-IndLabel.Font = Enum.Font.GothamBold
-IndLabel.TextSize = 13
-IndLabel.TextXAlignment = Enum.TextXAlignment.Left
-IndLabel.ZIndex = 10000
-IndLabel.Parent = Indicator
-
-local IndCount = Instance.new("TextLabel")
-IndCount.Text = "Найдено: 0"
-IndCount.Size = UDim2.new(1, -44, 0.5, 0)
-IndCount.Position = UDim2.new(0, 44, 0.5, 0)
-IndCount.BackgroundTransparency = 1
-IndCount.TextColor3 = Colors.TextDim
-IndCount.Font = Enum.Font.Gotham
-IndCount.TextSize = 11
-IndCount.TextXAlignment = Enum.TextXAlignment.Left
-IndCount.ZIndex = 10000
-IndCount.Parent = Indicator
-
--- Уведомление при клике (всплывающее)
-local ClickNotif = Instance.new("Frame")
-ClickNotif.Size = UDim2.new(0, 360, 0, 70)
-ClickNotif.Position = UDim2.new(0.5, -180, 0, 60)
-ClickNotif.BackgroundColor3 = Colors.Bg
-ClickNotif.BackgroundTransparency = 0.05
-ClickNotif.BorderSizePixel = 0
-ClickNotif.Visible = false
-ClickNotif.ZIndex = 9998
-ClickNotif.Parent = MainGui
-addCorner(ClickNotif, 10)
-addStroke(ClickNotif, Colors.ButtonCol, 2)
-
-local NotifTitle = Instance.new("TextLabel")
-NotifTitle.Text = "🎯 КЛИК ПО КНОПКЕ"
-NotifTitle.Size = UDim2.new(1, -16, 0, 20)
-NotifTitle.Position = UDim2.new(0, 8, 0, 6)
-NotifTitle.BackgroundTransparency = 1
-NotifTitle.TextColor3 = Colors.ButtonCol
-NotifTitle.Font = Enum.Font.GothamBold
-NotifTitle.TextSize = 12
-NotifTitle.TextXAlignment = Enum.TextXAlignment.Left
-NotifTitle.ZIndex = 9999
-NotifTitle.Parent = ClickNotif
-
-local NotifPath = Instance.new("TextLabel")
-NotifPath.Text = ""
-NotifPath.Size = UDim2.new(1, -16, 0, 16)
-NotifPath.Position = UDim2.new(0, 8, 0, 26)
-NotifPath.BackgroundTransparency = 1
-NotifPath.TextColor3 = Colors.CodeCol
-NotifPath.Font = Enum.Font.Code
-NotifPath.TextSize = 11
-NotifPath.TextXAlignment = Enum.TextXAlignment.Left
-NotifPath.TextTruncate = Enum.TextTruncate.AtEnd
-NotifPath.ZIndex = 9999
-NotifPath.Parent = ClickNotif
-
-local NotifInfo = Instance.new("TextLabel")
-NotifInfo.Text = ""
-NotifInfo.Size = UDim2.new(1, -16, 0, 14)
-NotifInfo.Position = UDim2.new(0, 8, 0, 44)
-NotifInfo.BackgroundTransparency = 1
-NotifInfo.TextColor3 = Colors.TextDim
-NotifInfo.Font = Enum.Font.Gotham
-NotifInfo.TextSize = 10
-NotifInfo.TextXAlignment = Enum.TextXAlignment.Left
-NotifInfo.ZIndex = 9999
-NotifInfo.Parent = ClickNotif
-
--- Основное окно (список истории кликов)
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 480, 0, 500)
-MainFrame.Position = UDim2.new(0, 20, 0, 80)
-MainFrame.BackgroundColor3 = Colors.Bg
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Parent = MainGui
-addCorner(MainFrame, 12)
-addStroke(MainFrame, Colors.Border, 1.5)
-makeDraggable(MainFrame)
-
-local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 42)
-TitleBar.BackgroundColor3 = Colors.BgLight
-TitleBar.BorderSizePixel = 0
-TitleBar.Parent = MainFrame
-addCorner(TitleBar, 12)
-
-local TitleFix = Instance.new("Frame")
-TitleFix.Size = UDim2.new(1, 0, 0, 12)
-TitleFix.Position = UDim2.new(0, 0, 1, -12)
-TitleFix.BackgroundColor3 = Colors.BgLight
-TitleFix.BorderSizePixel = 0
-TitleFix.Parent = TitleBar
-
-local TitleLbl = Instance.new("TextLabel")
-TitleLbl.Text = "🎧 EVENT LISTENER"
-TitleLbl.Size = UDim2.new(1, -150, 1, 0)
-TitleLbl.Position = UDim2.new(0, 12, 0, 0)
-TitleLbl.BackgroundTransparency = 1
-TitleLbl.TextColor3 = Colors.Text
-TitleLbl.Font = Enum.Font.GothamBold
-TitleLbl.TextSize = 15
-TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-TitleLbl.Parent = TitleBar
-
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Text = "✕"
-CloseBtn.Size = UDim2.new(0, 28, 0, 28)
-CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
-CloseBtn.BackgroundColor3 = Colors.Danger
-CloseBtn.TextColor3 = Colors.Text
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 14
-CloseBtn.BorderSizePixel = 0
-CloseBtn.Parent = TitleBar
-addCorner(CloseBtn, 6)
-
-local MinBtn = Instance.new("TextButton")
-MinBtn.Text = "—"
-MinBtn.Size = UDim2.new(0, 28, 0, 28)
-MinBtn.Position = UDim2.new(1, -66, 0.5, -14)
-MinBtn.BackgroundColor3 = Colors.BgLighter
-MinBtn.TextColor3 = Colors.Text
-MinBtn.Font = Enum.Font.GothamBold
-MinBtn.TextSize = 16
-MinBtn.BorderSizePixel = 0
-MinBtn.Parent = TitleBar
-addCorner(MinBtn, 6)
-
--- Кнопка вкл/выкл
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Text = "🎧 СЛУШАТЬ: ВЫКЛ"
-ToggleBtn.Size = UDim2.new(1, -24, 0, 40)
-ToggleBtn.Position = UDim2.new(0, 12, 0, 54)
-ToggleBtn.BackgroundColor3 = Colors.BgLighter
-ToggleBtn.TextColor3 = Colors.Text
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.TextSize = 13
-ToggleBtn.BorderSizePixel = 0
-ToggleBtn.AutoButtonColor = false
-ToggleBtn.Parent = MainFrame
-addCorner(ToggleBtn, 8)
-
--- Кнопка очистки истории
-local ClearBtn = Instance.new("TextButton")
-ClearBtn.Text = "🗑 Очистить историю"
-ClearBtn.Size = UDim2.new(1, -24, 0, 32)
-ClearBtn.Position = UDim2.new(0, 12, 0, 100)
-ClearBtn.BackgroundColor3 = Colors.Danger
-ClearBtn.TextColor3 = Colors.Text
-ClearBtn.Font = Enum.Font.GothamBold
-ClearBtn.TextSize = 12
-ClearBtn.BorderSizePixel = 0
-ClearBtn.AutoButtonColor = false
-ClearBtn.Parent = MainFrame
-addCorner(ClearBtn, 8)
-
--- Инфо-панель выбранной кнопки
-local InfoPanel = Instance.new("Frame")
-InfoPanel.Size = UDim2.new(1, -24, 0, 100)
-InfoPanel.Position = UDim2.new(0, 12, 0, 140)
-InfoPanel.BackgroundColor3 = Colors.BgLight
-InfoPanel.BorderSizePixel = 0
-InfoPanel.Parent = MainFrame
-addCorner(InfoPanel, 8)
-addStroke(InfoPanel, Colors.ButtonCol, 2)
-
-local IP_Title = Instance.new("TextLabel")
-IP_Title.Text = "🖱 ИНФО О КНОПКЕ (последний клик)"
-IP_Title.Size = UDim2.new(1, -16, 0, 18)
-IP_Title.Position = UDim2.new(0, 8, 0, 4)
-IP_Title.BackgroundTransparency = 1
-IP_Title.TextColor3 = Colors.ButtonCol
-IP_Title.Font = Enum.Font.GothamBold
-IP_Title.TextSize = 11
-IP_Title.TextXAlignment = Enum.TextXAlignment.Left
-IP_Title.Parent = InfoPanel
-
-local IP_Path = Instance.new("TextLabel")
-IP_Path.Text = ""
-IP_Path.Size = UDim2.new(1, -16, 0, 16)
-IP_Path.Position = UDim2.new(0, 8, 0, 24)
-IP_Path.BackgroundTransparency = 1
-IP_Path.TextColor3 = Colors.CodeCol
-IP_Path.Font = Enum.Font.Code
-IP_Path.TextSize = 10
-IP_Path.TextXAlignment = Enum.TextXAlignment.Left
-IP_Path.TextTruncate = Enum.TextTruncate.AtEnd
-IP_Path.Parent = InfoPanel
-
-local IP_Info = Instance.new("TextLabel")
-IP_Info.Text = ""
-IP_Info.Size = UDim2.new(1, -16, 0, 16)
-IP_Info.Position = UDim2.new(0, 8, 0, 42)
-IP_Info.BackgroundTransparency = 1
-IP_Info.TextColor3 = Colors.Text
-IP_Info.Font = Enum.Font.Gotham
-IP_Info.TextSize = 10
-IP_Info.TextXAlignment = Enum.TextXAlignment.Left
-IP_Info.Parent = InfoPanel
-
-local IP_CopyBtn = Instance.new("TextButton")
-IP_CopyBtn.Text = "📋 Копировать код вызова"
-IP_CopyBtn.Size = UDim2.new(0.5, -12, 0, 24)
-IP_CopyBtn.Position = UDim2.new(0, 8, 1, -30)
-IP_CopyBtn.BackgroundColor3 = Colors.Success
-IP_CopyBtn.TextColor3 = Colors.Text
-IP_CopyBtn.Font = Enum.Font.GothamBold
-IP_CopyBtn.TextSize = 10
-IP_CopyBtn.BorderSizePixel = 0
-IP_CopyBtn.AutoButtonColor = false
-IP_CopyBtn.Parent = InfoPanel
-addCorner(IP_CopyBtn, 6)
-
-local IP_TestBtn = Instance.new("TextButton")
-IP_TestBtn.Text = "🧪 Тестовый клик"
-IP_TestBtn.Size = UDim2.new(0.5, -12, 0, 24)
-IP_TestBtn.Position = UDim2.new(0.5, 4, 1, -30)
-IP_TestBtn.BackgroundColor3 = Colors.Warning
-IP_TestBtn.TextColor3 = Colors.Text
-IP_TestBtn.Font = Enum.Font.GothamBold
-IP_TestBtn.TextSize = 10
-IP_TestBtn.BorderSizePixel = 0
-IP_TestBtn.AutoButtonColor = false
-IP_TestBtn.Parent = InfoPanel
-addCorner(IP_TestBtn, 6)
-
--- Заголовок истории
-local HistoryLbl = Instance.new("TextLabel")
-HistoryLbl.Text = "📜 ИСТОРИЯ КЛИКОВ:"
-HistoryLbl.Size = UDim2.new(1, -24, 0, 20)
-HistoryLbl.Position = UDim2.new(0, 12, 0, 248)
-HistoryLbl.BackgroundTransparency = 1
-HistoryLbl.TextColor3 = Colors.TextDim
-HistoryLbl.Font = Enum.Font.GothamBold
-HistoryLbl.TextSize = 11
-HistoryLbl.TextXAlignment = Enum.TextXAlignment.Left
-HistoryLbl.Parent = MainFrame
-
--- Список истории
-local HistoryList = Instance.new("ScrollingFrame")
-HistoryList.Size = UDim2.new(1, -24, 1, -290)
-HistoryList.Position = UDim2.new(0, 12, 0, 274)
-HistoryList.BackgroundColor3 = Colors.BgLight
-HistoryList.BorderSizePixel = 0
-HistoryList.ScrollBarThickness = 6
-HistoryList.ScrollBarImageColor3 = Colors.Accent
-HistoryList.CanvasSize = UDim2.new(0, 0, 0, 0)
-HistoryList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-HistoryList.Parent = MainFrame
-addCorner(HistoryList, 8)
-
-local HistoryLayout = Instance.new("UIListLayout")
-HistoryLayout.Padding = UDim.new(0, 4)
-HistoryLayout.SortOrder = Enum.SortOrder.LayoutOrder
-HistoryLayout.Parent = HistoryList
-
--- ═══════════════════════════════════════════════════════
--- 📋 ЛОГИКА
--- ═══════════════════════════════════════════════════════
-local ListenerActive = false
-local LastButton = nil
-local ClickHistory = {}
-local FoundCount = 0
-
--- Поиск кнопки под точкой
-local function findButtonAtScreenPos(x, y)
-    local candidates = {}
+local function collectAllButtons()
+    local buttons = {}
 
     local function scanGui(gui)
         pcall(function()
-            if not gui:IsA("ScreenGui") or not gui.Enabled then return end
-            -- Пропускаем свои GUI
-            if gui == MainGui then return end
-            local name = (gui.Name or ""):lower()
-            if name:find("eventlistener") or name:find("objinspector") 
-               or name:find("esp_") or name:find("espmainui") then return end
+            if not gui:IsA("ScreenGui") then return end
+            if isOurGui(gui) then return end
 
-            local objs = gui:GetGuiObjectsAtPosition(x, y)
-            for _, o in pairs(objs) do
-                if o:IsA("GuiButton") then
-                    table.insert(candidates, o)
-                end
-                local p = o.Parent
-                while p and p ~= game do
-                    if p:IsA("GuiButton") then
-                        table.insert(candidates, p)
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if obj:IsA("GuiButton") then
+                    -- Пропускаем кнопки из наших GUI
+                    local isOurs = false
+                    local p = obj
+                    while p and p ~= game do
+                        if isOurGui(p) then isOurs = true; break end
+                        p = p.Parent
                     end
-                    p = p.Parent
+                    if not isOurs then
+                        table.insert(buttons, obj)
+                    end
                 end
             end
         end)
@@ -511,180 +195,415 @@ local function findButtonAtScreenPos(x, y)
         end
     end)
 
-    local best = nil
-    for _, btn in ipairs(candidates) do
-        if btn.Visible and btn.Active then
-            if not best or (btn.ZIndex or 0) > (best.ZIndex or 0) then
-                best = btn
-            end
-        end
-    end
-    return best, #candidates
+    return buttons
 end
 
--- Добавить клик в историю
-local function addToHistory(button, info)
+-- ═══════════════════════════════════════════════════════
+-- 🖥️ UI
+-- ═══════════════════════════════════════════════════════
+local MainGui = Instance.new("ScreenGui")
+MainGui.Name = "EventListener_UI"
+MainGui.ResetOnSpawn = false
+MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+MainGui.DisplayOrder = 100
+pcall(function() MainGui.Parent = CoreGui end)
+if not MainGui.Parent then MainGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 520, 0, 620)
+MainFrame.Position = UDim2.new(0, 20, 0, 60)
+MainFrame.BackgroundColor3 = Colors.Bg
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Parent = MainGui
+addCorner(MainFrame, 12)
+addStroke(MainFrame, Colors.Border, 1.5)
+makeDraggable(MainFrame)
+
+-- Заголовок
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 42)
+TitleBar.BackgroundColor3 = Colors.BgLight
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+addCorner(TitleBar, 12)
+
+local TitleFix = Instance.new("Frame")
+TitleFix.Size = UDim2.new(1, 0, 0, 12)
+TitleFix.Position = UDim2.new(0, 0, 1, -12)
+TitleFix.BackgroundColor3 = Colors.BgLight
+TitleFix.BorderSizePixel = 0
+TitleFix.Parent = TitleBar
+
+local TitleLbl = Instance.new("TextLabel")
+TitleLbl.Text = "🎧 СПИСОК ВСЕХ КНОПОК"
+TitleLbl.Size = UDim2.new(1, -150, 1, 0)
+TitleLbl.Position = UDim2.new(0, 12, 0, 0)
+TitleLbl.BackgroundTransparency = 1
+TitleLbl.TextColor3 = Colors.Text
+TitleLbl.Font = Enum.Font.GothamBold
+TitleLbl.TextSize = 15
+TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+TitleLbl.Parent = TitleBar
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Text = "—"
+MinBtn.Size = UDim2.new(0, 28, 0, 28)
+MinBtn.Position = UDim2.new(1, -66, 0.5, -14)
+MinBtn.BackgroundColor3 = Colors.BgLighter
+MinBtn.TextColor3 = Colors.Text
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 16
+MinBtn.BorderSizePixel = 0
+MinBtn.Parent = TitleBar
+addCorner(MinBtn, 6)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Text = "✕"
+CloseBtn.Size = UDim2.new(0, 28, 0, 28)
+CloseBtn.Position = UDim2.new(1, -34, 0.5, -14)
+CloseBtn.BackgroundColor3 = Colors.Danger
+CloseBtn.TextColor3 = Colors.Text
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Parent = TitleBar
+addCorner(CloseBtn, 6)
+
+-- Кнопки управления
+local RefreshBtn = Instance.new("TextButton")
+RefreshBtn.Text = "🔄 Обновить список"
+RefreshBtn.Size = UDim2.new(0.5, -16, 0, 40)
+RefreshBtn.Position = UDim2.new(0, 12, 0, 54)
+RefreshBtn.BackgroundColor3 = Colors.Success
+RefreshBtn.TextColor3 = Colors.Text
+RefreshBtn.Font = Enum.Font.GothamBold
+RefreshBtn.TextSize = 13
+RefreshBtn.BorderSizePixel = 0
+RefreshBtn.AutoButtonColor = false
+RefreshBtn.Parent = MainFrame
+addCorner(RefreshBtn, 8)
+
+local AutoRefreshBtn = Instance.new("TextButton")
+AutoRefreshBtn.Text = "🔁 Авто-обновление: ВЫКЛ"
+AutoRefreshBtn.Size = UDim2.new(0.5, -16, 0, 40)
+AutoRefreshBtn.Position = UDim2.new(0.5, 4, 0, 54)
+AutoRefreshBtn.BackgroundColor3 = Colors.BgLighter
+AutoRefreshBtn.TextColor3 = Colors.Text
+AutoRefreshBtn.Font = Enum.Font.GothamBold
+AutoRefreshBtn.TextSize = 12
+AutoRefreshBtn.BorderSizePixel = 0
+AutoRefreshBtn.AutoButtonColor = false
+AutoRefreshBtn.Parent = MainFrame
+addCorner(AutoRefreshBtn, 8)
+
+-- Поиск
+local SearchBox = Instance.new("TextBox")
+SearchBox.Size = UDim2.new(1, -24, 0, 34)
+SearchBox.Position = UDim2.new(0, 12, 0, 104)
+SearchBox.BackgroundColor3 = Colors.BgLighter
+SearchBox.PlaceholderText = "🔎 Поиск по имени кнопки..."
+SearchBox.PlaceholderColor3 = Colors.TextDim
+SearchBox.Text = ""
+SearchBox.TextColor3 = Colors.Text
+SearchBox.Font = Enum.Font.Gotham
+SearchBox.TextSize = 13
+SearchBox.BorderSizePixel = 0
+SearchBox.ClearTextOnFocus = false
+SearchBox.Parent = MainFrame
+addCorner(SearchBox, 8)
+
+-- Статистика
+local StatsLabel = Instance.new("TextLabel")
+StatsLabel.Text = "Найдено кнопок: 0"
+StatsLabel.Size = UDim2.new(1, -24, 0, 22)
+StatsLabel.Position = UDim2.new(0, 12, 0, 144)
+StatsLabel.BackgroundTransparency = 1
+StatsLabel.TextColor3 = Colors.Warning
+StatsLabel.Font = Enum.Font.GothamBold
+StatsLabel.TextSize = 12
+StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatsLabel.Parent = MainFrame
+
+-- Список кнопок
+local ButtonsList = Instance.new("ScrollingFrame")
+ButtonsList.Size = UDim2.new(1, -24, 1, -180)
+ButtonsList.Position = UDim2.new(0, 12, 0, 170)
+ButtonsList.BackgroundColor3 = Colors.BgLight
+ButtonsList.BorderSizePixel = 0
+ButtonsList.ScrollBarThickness = 6
+ButtonsList.ScrollBarImageColor3 = Colors.Accent
+ButtonsList.CanvasSize = UDim2.new(0, 0, 0, 0)
+ButtonsList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ButtonsList.Parent = MainFrame
+addCorner(ButtonsList, 8)
+
+local ButtonsLayout = Instance.new("UIListLayout")
+ButtonsLayout.Padding = UDim.new(0, 4)
+ButtonsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ButtonsLayout.Parent = ButtonsList
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ИНФО-ОКНО (для выбранной кнопки)
+-- ═══════════════════════════════════════════════════════
+local NotifGui = Instance.new("ScreenGui")
+NotifGui.Name = "EventListener_Notif"
+NotifGui.ResetOnSpawn = false
+NotifGui.DisplayOrder = 101
+pcall(function() NotifGui.Parent = CoreGui end)
+if not NotifGui.Parent then NotifGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local InfoFrame = Instance.new("Frame")
+InfoFrame.Size = UDim2.new(0, 420, 0, 160)
+InfoFrame.Position = UDim2.new(0.5, -210, 0, 20)
+InfoFrame.BackgroundColor3 = Colors.Bg
+InfoFrame.BackgroundTransparency = 0.05
+InfoFrame.BorderSizePixel = 0
+InfoFrame.Visible = false
+InfoFrame.ZIndex = 9999
+InfoFrame.Parent = NotifGui
+addCorner(InfoFrame, 10)
+addStroke(InfoFrame, Colors.ButtonCol, 2)
+makeDraggable(InfoFrame)
+
+local InfoTitle = Instance.new("TextLabel")
+InfoTitle.Text = "🖱 КНОПКА"
+InfoTitle.Size = UDim2.new(1, -16, 0, 24)
+InfoTitle.Position = UDim2.new(0, 8, 0, 6)
+InfoTitle.BackgroundTransparency = 1
+InfoTitle.TextColor3 = Colors.ButtonCol
+InfoTitle.Font = Enum.Font.GothamBold
+InfoTitle.TextSize = 13
+InfoTitle.TextXAlignment = Enum.TextXAlignment.Left
+InfoTitle.ZIndex = 10000
+InfoTitle.Parent = InfoFrame
+
+local InfoPath = Instance.new("TextLabel")
+InfoPath.Text = ""
+InfoPath.Size = UDim2.new(1, -16, 0, 32)
+InfoPath.Position = UDim2.new(0, 8, 0, 32)
+InfoPath.BackgroundTransparency = 1
+InfoPath.TextColor3 = Colors.CodeCol
+InfoPath.Font = Enum.Font.Code
+InfoPath.TextSize = 10
+InfoPath.TextXAlignment = Enum.TextXAlignment.Left
+InfoPath.TextWrapped = true
+InfoPath.ZIndex = 10000
+InfoPath.Parent = InfoFrame
+
+local InfoDetails = Instance.new("TextLabel")
+InfoDetails.Text = ""
+InfoDetails.Size = UDim2.new(1, -16, 0, 40)
+InfoDetails.Position = UDim2.new(0, 8, 0, 68)
+InfoDetails.BackgroundTransparency = 1
+InfoDetails.TextColor3 = Colors.Text
+InfoDetails.Font = Enum.Font.Gotham
+InfoDetails.TextSize = 11
+InfoDetails.TextXAlignment = Enum.TextXAlignment.Left
+InfoDetails.TextWrapped = true
+InfoDetails.ZIndex = 10000
+InfoDetails.Parent = InfoFrame
+
+local InfoCopyBtn = Instance.new("TextButton")
+InfoCopyBtn.Text = "📋 Копировать код"
+InfoCopyBtn.Size = UDim2.new(0.5, -12, 0, 28)
+InfoCopyBtn.Position = UDim2.new(0, 8, 1, -36)
+InfoCopyBtn.BackgroundColor3 = Colors.Success
+InfoCopyBtn.TextColor3 = Colors.Text
+InfoCopyBtn.Font = Enum.Font.GothamBold
+InfoCopyBtn.TextSize = 11
+InfoCopyBtn.BorderSizePixel = 0
+InfoCopyBtn.AutoButtonColor = false
+InfoCopyBtn.ZIndex = 10000
+InfoCopyBtn.Parent = InfoFrame
+addCorner(InfoCopyBtn, 6)
+
+local InfoCloseBtn = Instance.new("TextButton")
+InfoCloseBtn.Text = "✕ Закрыть"
+InfoCloseBtn.Size = UDim2.new(0.5, -12, 0, 28)
+InfoCloseBtn.Position = UDim2.new(0.5, 4, 1, -36)
+InfoCloseBtn.BackgroundColor3 = Colors.Danger
+InfoCloseBtn.TextColor3 = Colors.Text
+InfoCloseBtn.Font = Enum.Font.GothamBold
+InfoCloseBtn.TextSize = 11
+InfoCloseBtn.BorderSizePixel = 0
+InfoCloseBtn.AutoButtonColor = false
+InfoCloseBtn.ZIndex = 10000
+InfoCloseBtn.Parent = InfoFrame
+addCorner(InfoCloseBtn, 6)
+
+-- ═══════════════════════════════════════════════════════
+-- 📋 ЛОГИКА
+-- ═══════════════════════════════════════════════════════
+local AllButtons = {}
+local SelectedButton = nil
+local AutoRefresh = false
+local SearchQuery = ""
+
+local function showInfo(button)
+    SelectedButton = button
+    local info = analyzeButton(button)
+    if not info then return end
+
     local mainPath = info.PlayerGuiPath or info.CoreGuiPath or info.FullPath
     local prefix = info.PlayerGuiPath and "PlayerGui." or (info.CoreGuiPath and "CoreGui." or "")
 
-    table.insert(ClickHistory, 1, {
-        Button = button,
-        Name = button.Name,
-        Class = button.ClassName,
-        Path = prefix .. mainPath,
-        Size = info.Size,
-        Time = os.date("%H:%M:%S"),
-    })
-
-    if #ClickHistory > 30 then
-        table.remove(ClickHistory, 30)
-    end
-
-    -- Обновляем UI истории
-    for _, child in ipairs(HistoryList:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
-
-    for i, entry in ipairs(ClickHistory) do
-        local row = Instance.new("TextButton")
-        row.Size = UDim2.new(1, -8, 0, 40)
-        row.BackgroundColor3 = Colors.Bg
-        row.BorderSizePixel = 0
-        row.Text = ""
-        row.AutoButtonColor = false
-        row.Parent = HistoryList
-        addCorner(row, 6)
-
-        local line1 = Instance.new("TextLabel")
-        line1.Text = "[" .. entry.Time .. "] " .. entry.Class .. " [" .. entry.Name .. "]"
-        line1.Size = UDim2.new(1, -8, 0, 18)
-        line1.Position = UDim2.new(0, 8, 0, 2)
-        line1.BackgroundTransparency = 1
-        line1.TextColor3 = Colors.ButtonCol
-        line1.Font = Enum.Font.GothamBold
-        line1.TextSize = 11
-        line1.TextXAlignment = Enum.TextXAlignment.Left
-        line1.TextTruncate = Enum.TextTruncate.AtEnd
-        line1.Parent = row
-
-        local line2 = Instance.new("TextLabel")
-        line2.Text = entry.Path
-        line2.Size = UDim2.new(1, -8, 0, 16)
-        line2.Position = UDim2.new(0, 8, 0, 20)
-        line2.BackgroundTransparency = 1
-        line2.TextColor3 = Colors.CodeCol
-        line2.Font = Enum.Font.Code
-        line2.TextSize = 10
-        line2.TextXAlignment = Enum.TextXAlignment.Left
-        line2.TextTruncate = Enum.TextTruncate.AtEnd
-        line2.Parent = row
-
-        row.MouseButton1Click:Connect(function()
-            LastButton = entry.Button
-            InfoPanel_Update(entry.Button, info)
-        end)
-    end
-end
-
--- Обновление инфо-панели
-function InfoPanel_Update(button, info)
-    if not button or not info then return end
-    local mainPath = info.PlayerGuiPath or info.CoreGuiPath or info.FullPath
-    local prefix = info.PlayerGuiPath and "PlayerGui." or (info.CoreGuiPath and "CoreGui." or "")
-
-    IP_Title.Text = "🖱 " .. button.ClassName .. " [" .. button.Name .. "]"
-    IP_Path.Text = "📍 " .. prefix .. mainPath
-    IP_Info.Text = string.format("📐 %dx%d  |  👁 %s  |  🎯 %s  |  Z: %d",
+    InfoTitle.Text = "🖱 " .. info.ClassName .. " [" .. info.Name .. "]"
+    InfoPath.Text = "📍 " .. prefix .. mainPath
+    InfoDetails.Text = string.format(
+        "📐 Размер: %dx%d\n👁 Visible: %s  |  🎯 Active: %s  |  📱 Interactable: %s\n📊 ZIndex: %d",
         info.Size.X, info.Size.Y,
-        info.Visible and "видна" or "скрыта",
-        info.Active and "активна" or "неактивна",
+        tostring(info.Visible), tostring(info.Active), tostring(info.Interactable),
+        info.ZIndex
+    )
+    InfoFrame.Visible = true
+end
+
+local function createButtonRow(button, index)
+    local info = analyzeButton(button)
+    if not info then return end
+
+    -- Фильтр по поиску
+    if SearchQuery ~= "" then
+        local nameMatch = info.Name:lower():find(SearchQuery, 1, true)
+        local pathMatch = (info.PlayerGuiPath or info.CoreGuiPath or ""):lower():find(SearchQuery, 1, true)
+        if not nameMatch and not pathMatch then return end
+    end
+
+    local row = Instance.new("TextButton")
+    row.Size = UDim2.new(1, -8, 0, 56)
+    row.BackgroundColor3 = Colors.Bg
+    row.BorderSizePixel = 0
+    row.Text = ""
+    row.AutoButtonColor = false
+    row.Parent = ButtonsList
+    addCorner(row, 6)
+
+    -- Строка 1: класс + имя + размер
+    local line1 = Instance.new("TextLabel")
+    line1.Text = string.format("#%d  %s  [%s]  %dx%d",
+        index, info.ClassName, info.Name, info.Size.X, info.Size.Y)
+    line1.Size = UDim2.new(1, -8, 0, 18)
+    line1.Position = UDim2.new(0, 8, 0, 4)
+    line1.BackgroundTransparency = 1
+    line1.TextColor3 = info.Visible and Colors.ButtonCol or Colors.Danger
+    line1.Font = Enum.Font.GothamBold
+    line1.TextSize = 11
+    line1.TextXAlignment = Enum.TextXAlignment.Left
+    line1.TextTruncate = Enum.TextTruncate.AtEnd
+    line1.Parent = row
+
+    -- Строка 2: путь
+    local pathText = info.PlayerGuiPath or info.CoreGuiPath or info.FullPath
+    local pathPrefix = info.PlayerGuiPath and "PG: " or (info.CoreGuiPath and "CG: " or "")
+    local line2 = Instance.new("TextLabel")
+    line2.Text = pathPrefix .. pathText
+    line2.Size = UDim2.new(1, -8, 0, 16)
+    line2.Position = UDim2.new(0, 8, 0, 22)
+    line2.BackgroundTransparency = 1
+    line2.TextColor3 = Colors.CodeCol
+    line2.Font = Enum.Font.Code
+    line2.TextSize = 10
+    line2.TextXAlignment = Enum.TextXAlignment.Left
+    line2.TextTruncate = Enum.TextTruncate.AtEnd
+    line2.Parent = row
+
+    -- Строка 3: координаты
+    local line3 = Instance.new("TextLabel")
+    line3.Text = string.format("📍 X=%.0f Y=%.0f  |  👁 %s  |  🎯 %s  |  Z:%d",
+        info.Position.X, info.Position.Y,
+        info.Visible and "видна" or "СКРЫТА",
+        info.Active and "активна" or "НЕАКТИВНА",
         info.ZIndex)
-end
+    line3.Size = UDim2.new(1, -8, 0, 14)
+    line3.Position = UDim2.new(0, 8, 0, 38)
+    line3.BackgroundTransparency = 1
+    line3.TextColor3 = Colors.TextDim
+    line3.Font = Enum.Font.Gotham
+    line3.TextSize = 10
+    line3.TextXAlignment = Enum.TextXAlignment.Left
+    line3.Parent = row
 
--- Показ уведомления
-local notifTimer = nil
-local function showClickNotif(button, info)
-    local mainPath = info.PlayerGuiPath or info.CoreGuiPath or info.FullPath
-    local prefix = info.PlayerGuiPath and "PlayerGui." or (info.CoreGuiPath and "CoreGui." or "")
-
-    NotifTitle.Text = "🎯 " .. button.ClassName .. " [" .. button.Name .. "]"
-    NotifPath.Text = "📍 " .. prefix .. mainPath
-    NotifInfo.Text = string.format("📐 %dx%d  |  👁 %s  |  🎯 %s",
-        info.Size.X, info.Size.Y,
-        info.Visible and "видна" or "скрыта",
-        info.Active and "активна" or "неактивна")
-
-    ClickNotif.Visible = true
-
-    if notifTimer then task.cancel(notifTimer) end
-    notifTimer = task.delay(3, function()
-        ClickNotif.Visible = false
+    row.MouseButton1Click:Connect(function()
+        showInfo(button)
     end)
 end
 
--- ─── Перехват кликов ───
-local listenerConn = UserInputService.InputBegan:Connect(function(input, gpe)
-    if not ListenerActive then return end
-    if gpe then return end
+local function refreshList()
+    -- Очистить
+    for _, child in ipairs(ButtonsList:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
 
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-       or input.UserInputType == Enum.UserInputType.Touch then
+    -- Собрать
+    AllButtons = collectAllButtons()
 
-        local mousePos = UserInputService:GetMouseLocation()
-
-        -- Игнорируем клики по нашему окну
-        local guiAtPos = LocalPlayer.PlayerGui:GetGuiObjectsAtPosition(mousePos.X, mousePos.Y)
-        for _, obj in pairs(guiAtPos) do
-            if obj:IsDescendantOf(MainGui) then return end
+    -- Сортировать: сначала видимые, потом по имени
+    table.sort(AllButtons, function(a, b)
+        if a.Visible ~= b.Visible then
+            return a.Visible
         end
+        return a.Name:lower() < b.Name:lower()
+    end)
 
-        -- Ищем кнопку под точкой клика
-        local button = findButtonAtScreenPos(mousePos.X, mousePos.Y)
-
-        if button then
-            local info = analyzeButton(button)
-            if info then
-                LastButton = button
-                InfoPanel_Update(button, info)
-                addToHistory(button, info)
-                showClickNotif(button, info)
-                FoundCount = FoundCount + 1
-                IndCount.Text = "Найдено: " .. FoundCount
-                print("[EventListener] 🎯 Клик по: " .. info.FullPath)
+    -- Показать
+    local shown = 0
+    for i, button in ipairs(AllButtons) do
+        local info = analyzeButton(button)
+        if info then
+            -- Проверка фильтра
+            local ok = true
+            if SearchQuery ~= "" then
+                local nameMatch = info.Name:lower():find(SearchQuery, 1, true)
+                local pathMatch = (info.PlayerGuiPath or info.CoreGuiPath or ""):lower():find(SearchQuery, 1, true)
+                if not nameMatch and not pathMatch then ok = false end
+            end
+            if ok then
+                createButtonRow(button, i)
+                shown = shown + 1
             end
         end
     end
-end)
 
--- ─── Toggle ───
-local function showListener()
-    ListenerActive = true
-    Indicator.Visible = true
-    ToggleBtn.Text = "🎧 СЛУШАТЬ: ВКЛ"
-    ToggleBtn.BackgroundColor3 = Colors.Success
-    print("[EventListener] 🎧 ВКЛ")
+    StatsLabel.Text = "Найдено кнопок: " .. #AllButtons .. "  (показано: " .. shown .. ")"
 end
 
-local function hideListener()
-    ListenerActive = false
-    Indicator.Visible = false
-    ClickNotif.Visible = false
-    ToggleBtn.Text = "🎧 СЛУШАТЬ: ВЫКЛ"
-    ToggleBtn.BackgroundColor3 = Colors.BgLighter
-    print("[EventListener] 🎧 ВЫКЛ")
-end
-
-ToggleBtn.MouseButton1Click:Connect(function()
-    if ListenerActive then hideListener() else showListener() end
-end)
-
--- Копировать код
-IP_CopyBtn.MouseButton1Click:Connect(function()
-    if not LastButton then
-        IP_Path.Text = "⚠ Сначала кликни по кнопке"
-        return
+-- Авто-обновление
+task.spawn(function()
+    while getgenv().EVENT_LISTENER_LOADED do
+        task.wait(3)
+        if AutoRefresh then
+            refreshList()
+        end
     end
-    local info = analyzeButton(LastButton)
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- 🎛️ КНОПКИ
+-- ═══════════════════════════════════════════════════════
+RefreshBtn.MouseButton1Click:Connect(function()
+    refreshList()
+end)
+
+AutoRefreshBtn.MouseButton1Click:Connect(function()
+    AutoRefresh = not AutoRefresh
+    if AutoRefresh then
+        AutoRefreshBtn.Text = "🔁 Авто-обновление: ВКЛ"
+        AutoRefreshBtn.BackgroundColor3 = Colors.Success
+    else
+        AutoRefreshBtn.Text = "🔁 Авто-обновление: ВЫКЛ"
+        AutoRefreshBtn.BackgroundColor3 = Colors.BgLighter
+    end
+end)
+
+SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    SearchQuery = SearchBox.Text:lower()
+    refreshList()
+end)
+
+InfoCopyBtn.MouseButton1Click:Connect(function()
+    if not SelectedButton then return end
+    local info = analyzeButton(SelectedButton)
     if not info then return end
 
     local mainPath = info.PlayerGuiPath or info.CoreGuiPath
@@ -703,89 +622,45 @@ IP_CopyBtn.MouseButton1Click:Connect(function()
     print("btn:Activate()")
     print("════════════════════════════════════════")
 
-    IP_Path.Text = "✅ Код скопирован в консоль"
+    InfoPath.Text = "✅ Код скопирован в консоль (F9)"
 end)
 
--- Тестовый клик
-IP_TestBtn.MouseButton1Click:Connect(function()
-    if not LastButton then
-        IP_Path.Text = "⚠ Сначала кликни по кнопке"
-        return
-    end
-
-    local btn = LastButton
-    print("🧪 Тест клика по: " .. btn.Name)
-
-    pcall(function() btn.Activated:Fire() end)
-    print("  ✓ Activated")
-    task.wait(0.05)
-    pcall(function() btn.MouseButton1Click:Fire() end)
-    print("  ✓ MouseButton1Click")
-    task.wait(0.05)
-    pcall(function()
-        local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
-        btn.MouseButton1Down:Fire(pos.X, pos.Y)
-        btn.MouseButton1Up:Fire(pos.X, pos.Y)
-    end)
-    print("  ✓ MouseButton1Down/Up")
-    task.wait(0.05)
-    pcall(function() if btn.Activate then btn:Activate() end end)
-    print("  ✓ Activate()")
-    task.wait(0.05)
-    pcall(function() if btn.Select then btn:Select() end end)
-    print("  ✓ Select()")
-    task.wait(0.05)
-    pcall(function()
-        local pos = btn.AbsolutePosition + btn.AbsoluteSize / 2
-        VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
-    end)
-    print("  ✓ VirtualInputManager")
-
-    IP_Info.Text = "✅ Тест завершён — смотри что в игре произошло"
+InfoCloseBtn.MouseButton1Click:Connect(function()
+    InfoFrame.Visible = false
 end)
 
--- Очистка истории
-ClearBtn.MouseButton1Click:Connect(function()
-    ClickHistory = {}
-    FoundCount = 0
-    IndCount.Text = "Найдено: 0"
-    for _, child in ipairs(HistoryList:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
-    IP_Path.Text = ""
-    IP_Info.Text = ""
-    LastButton = nil
-    print("[EventListener] 🗑 История очищена")
-end)
-
--- ─── Свернуть ───
+-- Свернуть
 local minimized = false
 local originalSize = MainFrame.Size
 MinBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 480, 0, 42)}):Play()
-        ToggleBtn.Visible = false
-        ClearBtn.Visible = false
-        InfoPanel.Visible = false
-        HistoryLbl.Visible = false
-        HistoryList.Visible = false
+        TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = UDim2.new(0, 520, 0, 42)}):Play()
+        RefreshBtn.Visible = false
+        AutoRefreshBtn.Visible = false
+        SearchBox.Visible = false
+        StatsLabel.Visible = false
+        ButtonsList.Visible = false
     else
         TweenService:Create(MainFrame, TweenInfo.new(0.2), {Size = originalSize}):Play()
-        ToggleBtn.Visible = true
-        ClearBtn.Visible = true
-        InfoPanel.Visible = true
-        HistoryLbl.Visible = true
-        HistoryList.Visible = true
+        RefreshBtn.Visible = true
+        AutoRefreshBtn.Visible = true
+        SearchBox.Visible = true
+        StatsLabel.Visible = true
+        ButtonsList.Visible = true
     end
 end)
 
 CloseBtn.MouseButton1Click:Connect(function()
     MainGui.Enabled = false
-    hideListener()
+    InfoFrame.Visible = false
 end)
+
+-- ═══════════════════════════════════════════════════════
+-- 🚀 СТАРТ
+-- ═══════════════════════════════════════════════════════
+task.wait(0.5)
+refreshList()
 
 -- ═══════════════════════════════════════════════════════
 -- 🌐 API
@@ -793,28 +668,17 @@ end)
 getgenv().EventListener = {
     Show = function() MainGui.Enabled = true end,
     Hide = function() MainGui.Enabled = false end,
-    Enable = showListener,
-    Disable = hideListener,
-    Toggle = function()
-        if ListenerActive then hideListener() else showListener() end
-    end,
-    GetHistory = function() return ClickHistory end,
-    ClearHistory = function()
-        ClickHistory = {}
-        FoundCount = 0
-        IndCount.Text = "Найдено: 0"
-        for _, child in ipairs(HistoryList:GetChildren()) do
-            if child:IsA("TextButton") then child:Destroy() end
-        end
-    end,
+    Refresh = refreshList,
+    GetButtons = function() return AllButtons end,
+    Analyze = analyzeButton,
     Destroy = function()
-        if listenerConn then listenerConn:Disconnect() end
         pcall(function() MainGui:Destroy() end)
+        pcall(function() NotifGui:Destroy() end)
         getgenv().EVENT_LISTENER_LOADED = false
     end,
 }
 
 print("[EventListener] ✅ Загружен!")
-print("[EventListener] 🎧 Жми «СЛУШАТЬ: ВКЛ» и кликай по кнопкам")
-print("[EventListener] Показ: getgenv().EventListener.Show()")
-print("[EventListener] Вкл: getgenv().EventListener.Enable()")
+print("[EventListener] Все кнопки собраны в список")
+print("[EventListener] Жми «🔄 Обновить список» для рескана")
+print("[EventListener] Вкл авто: getgenv().EventListener.Refresh()")
